@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Farm Fleet Fuel Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #21262d;
+    --border: #30363d;
+    --accent: #e8a02a;
+    --accent2: #f0c060;
+    --green: #3fb950;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --radius: 12px;
+    --font: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; overflow-x: hidden; }
+
+  /* PASSWORD SCREEN */
+  .lock-screen { position: fixed; inset: 0; background: var(--bg); z-index: 999; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .lock-card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 32px 24px; width: 100%; max-width: 360px; text-align: center; }
+  .lock-card .lock-icon { font-size: 48px; margin-bottom: 16px; }
+  .lock-card h2 { font-size: 22px; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+  .lock-card p { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+  .lock-card input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 14px 16px; border-radius: 10px; font-size: 18px; text-align: center; letter-spacing: 4px; margin-bottom: 12px; font-family: var(--font); }
+  .lock-card input:focus { outline: none; border-color: var(--accent); }
+  .lock-card .btn-unlock { width: 100%; padding: 14px; background: var(--accent); color: #000; font-size: 16px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; }
+  .lock-card .lock-error { font-size: 13px; color: var(--red); margin-top: 10px; min-height: 18px; }
+
+  /* LOADING OVERLAY */
+  .loading-overlay { position: fixed; inset: 0; background: rgba(13,17,23,0.85); z-index: 500; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+  .loading-overlay.show { display: flex; }
+  .spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-overlay p { font-size: 14px; color: var(--muted); }
+
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .header-title { display: flex; align-items: center; gap: 10px; }
+  .header-title .icon { font-size: 22px; }
+  .header-title h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; color: var(--accent); }
+  .header-title small { font-size: 11px; color: var(--muted); display: block; }
+  .header-actions { display: flex; gap: 8px; }
+  .btn-icon { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; }
+  .btn-icon:active { transform: scale(0.95); background: var(--border); }
+
+  .tabs { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 1; padding: 12px 6px; text-align: center; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; min-width: 70px; transition: all 0.15s; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .page { display: none; padding: 16px; }
+  .page.active { display: block; }
+
+  .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 22px; font-weight: 700; color: var(--accent); }
+  .stat-card .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .form-card h2 { font-size: 14px; font-weight: 600; color: var(--accent); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .form-row.single { grid-template-columns: 1fr; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.4px; }
+  .field input, .field select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 11px 12px; border-radius: 8px; font-size: 15px; font-family: var(--font); -webkit-appearance: none; appearance: none; width: 100%; }
+  .field select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238b949e' d='M6 8L0 0h12z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+  .field input[type=date] { color-scheme: dark; }
+
+  .type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .type-btn { padding: 12px; border-radius: 8px; border: 2px solid var(--border); background: var(--surface2); color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .type-btn.fuel-in.active { border-color: var(--green); color: var(--green); background: rgba(63,185,80,0.1); }
+  .type-btn.fuel-out.active { border-color: var(--blue); color: var(--blue); background: rgba(88,166,255,0.1); }
+
+  .consumption-display { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 10px; display: none; }
+  .consumption-display.visible { display: block; }
+  .consumption-display .c-label { font-size: 11px; color: var(--muted); }
+  .consumption-display .c-value { font-size: 18px; font-weight: 700; color: var(--accent2); margin-top: 4px; }
+
+  .btn-submit { width: 100%; padding: 15px; background: var(--accent); color: #000; font-size: 16px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; margin-top: 12px; letter-spacing: 0.3px; transition: all 0.15s; }
+  .btn-submit:active { transform: scale(0.98); background: var(--accent2); }
+  .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .log-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .log-header h2 { font-size: 14px; font-weight: 600; color: var(--muted); }
+  .filter-row { display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto; scrollbar-width: none; }
+  .filter-row::-webkit-scrollbar { display: none; }
+  .filter-chip { padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
+  .filter-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(232,160,42,0.1); }
+
+  .log-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 8px; display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+  .log-item .badge { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .log-item .badge.in { background: rgba(63,185,80,0.15); }
+  .log-item .badge.out { background: rgba(88,166,255,0.12); }
+  .log-item .info { flex: 1; min-width: 0; }
+  .log-item .info .name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-item .info .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .log-item .amounts { text-align: right; flex-shrink: 0; }
+  .log-item .amounts .litres { font-size: 16px; font-weight: 700; }
+  .log-item .amounts .consumption { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .log-item .amounts .in-color { color: var(--green); }
+  .log-item .amounts .out-color { color: var(--blue); }
+  .log-item:active { opacity: 0.7; }
+
+  .asset-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; }
+  .asset-card .asset-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .asset-card .asset-name { font-size: 15px; font-weight: 700; }
+  .asset-card .asset-type { font-size: 11px; color: var(--muted); background: var(--surface2); padding: 3px 8px; border-radius: 12px; }
+  .asset-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .a-stat { background: var(--surface2); border-radius: 8px; padding: 10px 8px; text-align: center; }
+  .a-stat .al { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+  .a-stat .av { font-size: 14px; font-weight: 700; }
+  .bar-track { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+  .bar-fill.ok { background: var(--green); }
+  .bar-fill.warn { background: var(--accent); }
+  .bar-fill.over { background: var(--red); }
+
+  .summary-table { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 16px; }
+  .summary-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .summary-table th { background: var(--surface2); padding: 10px 12px; text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+  .summary-table td { padding: 10px 12px; border-top: 1px solid var(--border); }
+
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: none; align-items: flex-end; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--surface); border-radius: 20px 20px 0 0; padding: 20px; width: 100%; max-height: 85vh; overflow-y: auto; }
+  .modal-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 16px; }
+  .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 14px; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .btn-outline { flex: 1; padding: 13px; border-radius: 10px; border: 1px solid var(--border); background: none; color: var(--text); font-size: 15px; font-weight: 600; cursor: pointer; }
+  .btn-danger { flex: 1; padding: 13px; border-radius: 10px; border: none; background: var(--red); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+
+  .import-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 30px 20px; text-align: center; cursor: pointer; margin-bottom: 14px; }
+  .import-zone .iz-icon { font-size: 36px; margin-bottom: 8px; }
+  .import-zone p { font-size: 14px; color: var(--muted); }
+  .import-zone input[type=file] { display: none; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 500; z-index: 400; opacity: 0; transition: opacity 0.3s; pointer-events: none; white-space: nowrap; }
+  .toast.show { opacity: 1; }
+  .toast.success { border-color: var(--green); color: var(--green); }
+  .toast.error { border-color: var(--red); color: var(--red); }
+
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty-state .es-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state p { font-size: 14px; }
+  .section-heading { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin: 16px 0 8px; }
+  .btn-add { background: var(--surface); border: 1px dashed var(--border); color: var(--muted); padding: 14px; border-radius: var(--radius); width: 100%; text-align: center; font-size: 14px; cursor: pointer; margin-top: 6px; }
+  .btn-add:active { background: var(--surface2); }
+</style>
+</head>
+<body>
+
+<!-- PASSWORD SCREEN -->
+<div class="lock-screen" id="lock-screen">
+  <div class="lock-card">
+    <div class="lock-icon">⛽</div>
+    <h2>Fleet Fuel Tracker</h2>
+    <p>Enter the farm password to continue</p>
+    <input type="password" id="pw-input" placeholder="••••••••" onkeydown="if(event.key==='Enter') checkPassword()">
+    <button class="btn-unlock" onclick="checkPassword()">Unlock</button>
+    <div class="lock-error" id="lock-error"></div>
+  </div>
+</div>
+
+<!-- LOADING OVERLAY -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="spinner"></div>
+  <p id="loading-msg">Loading data...</p>
+</div>
+
+<!-- MAIN APP (hidden until unlocked) -->
+<div id="app" style="display:none">
+
+<div class="header">
+  <div class="header-title">
+    <span class="icon">⛽</span>
+    <div>
+      <h1>Fleet Fuel Tracker</h1>
+      <small id="header-date">Loading...</small>
+    </div>
+  </div>
+  <div class="header-actions">
+    <button class="btn-icon" onclick="openImport()">📥 Import</button>
+    <button class="btn-icon" onclick="exportExcel()">📤 Export</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showPage('log')">📋 Log</div>
+  <div class="tab" onclick="showPage('entry')">➕ Entry</div>
+  <div class="tab" onclick="showPage('fleet')">🚜 Fleet</div>
+  <div class="tab" onclick="showPage('status')">⚡ Status</div>
+  <div class="tab" onclick="showPage('summary')">📊 Summary</div>
+</div>
+
+<!-- LOG PAGE -->
+<div class="page active" id="page-log">
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="label">Tank Level</div>
+      <div class="value" id="stat-tank">0 L</div>
+      <div class="sub">Estimated remaining</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">This Month</div>
+      <div class="value" id="stat-month">0 L</div>
+      <div class="sub">Total consumed</div>
+    </div>
+  </div>
+  <div class="filter-row" id="filter-row">
+    <div class="filter-chip active" onclick="setFilter('all', this)">All</div>
+    <div class="filter-chip" onclick="setFilter('TANK', this)">🛢 Tank In</div>
+  </div>
+  <div class="log-header"><h2 id="log-count">— entries</h2></div>
+  <div id="log-list"></div>
+</div>
+
+<!-- ENTRY PAGE -->
+<div class="page" id="page-entry">
+  <div class="form-card">
+    <h2>⛽ Record Fuel Transaction</h2>
+    <div class="type-toggle">
+      <div class="type-btn fuel-in active" id="btn-in" onclick="setType('IN')">🟢 Fuel IN<br><small style="font-size:10px;font-weight:400">Tank Refill</small></div>
+      <div class="type-btn fuel-out" id="btn-out" onclick="setType('OUT')">🔵 Fuel OUT<br><small style="font-size:10px;font-weight:400">Machine Fill</small></div>
+    </div>
+    <div class="form-row single" id="asset-row" style="display:none">
+      <div class="field">
+        <label>Asset / Machine</label>
+        <select id="f-asset" onchange="onAssetChange()"><option value="">Select asset...</option></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Date</label><input type="date" id="f-date"></div>
+      <div class="field"><label>Litres</label><input type="number" id="f-litres" placeholder="0.0" step="0.1" oninput="calcConsumption()"></div>
+    </div>
+    <div id="km-fields" style="display:none">
+      <div class="form-row">
+        <div class="field"><label>Prev Odometer (km)</label><input type="number" id="f-km-prev" placeholder="0" oninput="calcConsumption()"></div>
+        <div class="field"><label>Current Odometer (km)</label><input type="number" id="f-km-curr" placeholder="0" oninput="calcConsumption()"></div>
+      </div>
+    </div>
+    <div id="hr-fields" style="display:none">
+      <div class="form-row">
+        <div class="field"><label>Prev Hours</label><input type="number" id="f-hr-prev" placeholder="0.0" step="0.1" oninput="calcConsumption()"></div>
+        <div class="field"><label>Current Hours</label><input type="number" id="f-hr-curr" placeholder="0.0" step="0.1" oninput="calcConsumption()"></div>
+      </div>
+    </div>
+    <div class="form-row single">
+      <div class="field"><label>Notes (optional)</label><input type="text" id="f-notes" placeholder="Driver, purpose, etc."></div>
+    </div>
+    <div class="consumption-display" id="consumption-display">
+      <div class="c-label">Calculated Consumption</div>
+      <div class="c-value" id="consumption-value">—</div>
+    </div>
+    <button class="btn-submit" id="save-btn" onclick="saveEntry()">Save Entry</button>
+  </div>
+</div>
+
+<!-- FLEET PAGE -->
+<div class="page" id="page-fleet">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div class="filter-row" id="fleet-filter-row" style="margin-bottom:0;flex:1"></div>
+    <button onclick="openManageGroups()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap;margin-left:8px">⚙️ Groups</button>
+  </div>
+  <div id="fleet-list"></div>
+  <button class="btn-add" onclick="openAddAsset()">＋ Add Asset / Machine</button>
+</div>
+
+<!-- SUMMARY PAGE -->
+<div class="page" id="page-summary">
+  <div class="stats-row">
+    <div class="stat-card"><div class="label">Total In</div><div class="value" id="sum-in">0 L</div><div class="sub">All time</div></div>
+    <div class="stat-card"><div class="label">Total Out</div><div class="value" id="sum-out">0 L</div><div class="sub">All time</div></div>
+  </div>
+  <div class="section-heading">Tank Stock</div>
+  <div class="summary-table" style="margin-bottom:16px">
+    <table><thead><tr><th>Total In</th><th>Total Out</th><th>Current Stock</th></tr></thead>
+    <tbody><tr>
+      <td style="color:var(--green)" id="sum-total-in">—</td>
+      <td style="color:var(--blue)" id="sum-total-out">—</td>
+      <td style="color:var(--accent);font-weight:700" id="sum-stock">—</td>
+    </tr></tbody></table>
+  </div>
+  <div class="section-heading">Per Asset Summary</div>
+  <div class="summary-table"><table><thead><tr><th>Asset</th><th>Litres</th><th>Consumption</th></tr></thead><tbody id="summary-tbody"></tbody></table></div>
+  <div class="section-heading">Monthly Usage</div>
+  <div class="summary-table"><table><thead><tr><th>Month</th><th>In (L)</th><th>Out (L)</th></tr></thead><tbody id="monthly-tbody"></tbody></table></div>
+</div>
+
+<!-- STATUS PAGE -->
+<div class="page" id="page-status">
+  <div class="filter-row" id="status-filter-row" style="margin-bottom:12px"></div>
+  <div id="status-list"></div>
+</div>
+
+</div><!-- end #app -->
+
+<!-- MODALS -->
+<div class="modal-overlay" id="detail-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="detail-title">Entry Details</h3>
+    <div id="detail-view">
+      <div id="detail-body"></div>
+      <div class="modal-actions">
+        <button class="btn-outline" onclick="closeModal('detail-modal')">Close</button>
+        <button class="btn-icon" onclick="switchToEdit()" style="flex:1;justify-content:center;border-color:var(--accent);color:var(--accent)">✏️ Edit</button>
+        <button class="btn-danger" onclick="deleteEntry()">Delete</button>
+      </div>
+    </div>
+    <div id="detail-edit" style="display:none">
+      <div class="field" style="margin-bottom:10px"><label>Date</label><input type="date" id="edit-date"></div>
+      <div class="field" style="margin-bottom:10px"><label>Litres</label><input type="number" id="edit-litres" step="0.1" oninput="calcEditConsumption()"></div>
+      <div id="edit-km-fields" style="display:none">
+        <div class="form-row" style="margin-bottom:10px">
+          <div class="field"><label>Prev Reading (km)</label><input type="number" id="edit-km-prev" oninput="calcEditConsumption()"></div>
+          <div class="field"><label>Curr Reading (km)</label><input type="number" id="edit-km-curr" oninput="calcEditConsumption()"></div>
+        </div>
+      </div>
+      <div id="edit-hr-fields" style="display:none">
+        <div class="form-row" style="margin-bottom:10px">
+          <div class="field"><label>Prev Hours</label><input type="number" id="edit-hr-prev" step="0.1" oninput="calcEditConsumption()"></div>
+          <div class="field"><label>Curr Hours</label><input type="number" id="edit-hr-curr" step="0.1" oninput="calcEditConsumption()"></div>
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:10px"><label>Notes</label><input type="text" id="edit-notes"></div>
+      <div class="consumption-display" id="edit-consumption-display">
+        <div class="c-label">Calculated Consumption</div>
+        <div class="c-value" id="edit-consumption-value">—</div>
+      </div>
+      <div class="modal-actions" style="margin-top:12px">
+        <button class="btn-outline" onclick="switchToView()">Cancel</button>
+        <button class="btn-submit" style="flex:1" onclick="saveEdit()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="import-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Import from Excel</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Import your existing Fuel Log sheet. Expected columns: Date, Asset_ID, Type, Litres, Prev_Reading, Curr_Reading, Notes</p>
+    <div class="import-zone" onclick="document.getElementById('file-input').click()">
+      <div class="iz-icon">📂</div>
+      <p>Tap to select your .xlsx file</p>
+      <input type="file" id="file-input" accept=".xlsx,.xls" onchange="handleImport(event)">
+    </div>
+    <button class="btn-outline" onclick="closeModal('import-modal')" style="width:100%">Cancel</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="asset-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="asset-modal-title">Add Asset</h3>
+    <div class="field" style="margin-bottom:10px"><label>Asset ID / Name</label><input type="text" id="na-id" placeholder="e.g. TRACTOR1"></div>
+    <div class="field" style="margin-bottom:10px"><label>Description</label><input type="text" id="na-desc" placeholder="e.g. John Deere 6110"></div>
+    <div class="field" style="margin-bottom:10px"><label>Group</label><select id="na-group"><option value="Ungrouped">Ungrouped</option></select></div>
+    <div class="field" style="margin-bottom:10px">
+      <label>Reading Mode</label>
+      <select id="na-readingMode">
+        <option value="BOWSER_ONLY">Bowser Only</option>
+        <option value="BOWSER_MANUAL">Bowser + Manual</option>
+        <option value="MANUAL_ONLY">Manual Only</option>
+      </select>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label>Measurement Type</label>
+      <select id="na-type" onchange="onAssetTypeChange()">
+        <option value="HOURS">Hours (tractors)</option>
+        <option value="KM">Kilometres (vehicles)</option>
+        <option value="NONE">None (generators, pumps)</option>
+      </select>
+    </div>
+    <div class="field" style="margin-bottom:10px"><label>Service Interval (hrs or km, 0 = none)</label><input type="number" id="na-interval" placeholder="250" value="250" oninput="buildMilestoneDropdown()"></div>
+    <div id="na-last-service-section" style="border-top:1px solid var(--border);margin-top:4px;padding-top:12px;margin-bottom:4px">
+      <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Last Known Service (optional)</div>
+      <div class="field" style="margin-bottom:10px"><label id="na-last-reading-label">Reading at Last Service (hrs)</label><input type="number" id="na-last-reading" placeholder="e.g. 1550" oninput="updateNextPreview()"></div>
+      <div class="field" style="margin-bottom:10px"><label>Last Service Was</label><select id="na-last-milestone"><option value="">— select milestone —</option></select></div>
+      <div style="background:var(--surface2);border-radius:8px;padding:10px;margin-bottom:4px;display:none" id="na-next-preview">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Next service locked at</div>
+        <div style="font-size:18px;font-weight:700;color:var(--accent2)" id="na-next-val">—</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-outline" onclick="closeModal('asset-modal')">Cancel</button>
+      <button class="btn-submit" style="flex:1" onclick="saveAsset()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="service-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="svc-title">Log Service</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px" id="svc-subtitle"></p>
+    <div id="svc-milestone-box" style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
+      <div id="svc-milestone-icon" style="font-size:28px">🔧</div>
+      <div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">This will be</div><div style="font-size:16px;font-weight:700;color:var(--accent2)" id="svc-milestone-label">Service #1</div></div>
+    </div>
+    <div class="field" style="margin-bottom:10px"><label>Service Date</label><input type="date" id="svc-date"></div>
+    <div style="background:var(--surface2);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div class="field"><label id="svc-reading-label">Reading at Service (hrs)</label><input type="number" id="svc-current-reading" placeholder="e.g. 1550" oninput="updateSvcNextDue()"></div>
+    </div>
+    <div class="field" style="margin-bottom:14px"><label>Notes (optional)</label><input type="text" id="svc-notes" placeholder="Oil, filters, tyres, etc."></div>
+    <div style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:14px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Next service due at</div>
+      <div style="font-size:22px;font-weight:700;color:var(--green)" id="svc-next-due">—</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-outline" onclick="closeModal('service-modal')">Cancel</button>
+      <button class="btn-submit" style="flex:1" onclick="confirmService()">Save Service</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="delete-asset-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Delete Asset?</h3>
+    <p style="font-size:14px;color:var(--muted);margin-bottom:16px" id="delete-asset-msg"></p>
+    <div class="modal-actions">
+      <button class="btn-outline" onclick="closeModal('delete-asset-modal')">Cancel</button>
+      <button class="btn-danger" onclick="confirmDeleteAsset()">Yes, Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="manual-reading-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="mr-title">Update Reading</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:12px" id="mr-subtitle"></p>
+    <div class="field" style="margin-bottom:10px"><label>Date</label><input type="date" id="mr-date"></div>
+    <div class="field" style="margin-bottom:14px"><label id="mr-reading-label">Current Reading (hrs)</label><input type="number" id="mr-reading" placeholder="e.g. 1750"></div>
+    <div class="field" style="margin-bottom:14px"><label>Notes (optional)</label><input type="text" id="mr-notes"></div>
+    <div class="modal-actions">
+      <button class="btn-outline" onclick="closeModal('manual-reading-modal')">Cancel</button>
+      <button class="btn-danger" id="mr-delete-btn" style="display:none" onclick="deleteManualReading()">Delete</button>
+      <button class="btn-submit" style="flex:1" onclick="saveManualReading()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="groups-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Manage Groups</h3>
+    <div id="groups-list" style="margin-bottom:14px"></div>
+    <div style="display:flex;gap:8px;margin-bottom:4px">
+      <input type="text" id="new-group-name" placeholder="New group name..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:8px;font-size:15px">
+      <button onclick="addGroup()" style="background:var(--accent);color:#000;border:none;padding:10px 16px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">Add</button>
+    </div>
+    <div class="modal-actions" style="margin-top:12px"><button class="btn-outline" onclick="closeModal('groups-modal')">Done</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  SUPABASE CONFIG — replace these with your actual values
+// ============================================================
+const SUPABASE_URL = 'https://gzoejbhghmhwrbsxourl.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6b2VqYmhnaG1od3Jic3hvdXJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxOTMxNDMsImV4cCI6MjA5NDc2OTE0M30.MI18dTAJz7FyandCBQUXO-Dtr9vVB55ZMQQD7l0aKVU';
+const APP_PASSWORD  = 'farm2024';  // Change this to your preferred password
+
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ============================================================
+//  STATE — mirrors what was in localStorage
+// ============================================================
+let state = {
+  entries: [],
+  assets:  [],
+  groups:  ['Ungrouped']
+};
+
+let currentFilter      = 'all';
+let selectedEntryId    = null;
+let currentEntryType   = 'IN';
+let serviceAssetId     = null;
+let deleteAssetId      = null;
+let fleetFilter        = 'all';
+let statusFilter       = 'all';
+let manualReadingAssetId   = null;
+let editingAssetId         = null;
+let editingManualReadingId = null;
+
+// ============================================================
+//  PASSWORD
+// ============================================================
+function checkPassword() {
+  const val = document.getElementById('pw-input').value;
+  if (val === APP_PASSWORD) {
+    document.getElementById('lock-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    initApp();
+  } else {
+    document.getElementById('lock-error').textContent = 'Incorrect password. Try again.';
+    document.getElementById('pw-input').value = '';
+  }
+}
+
+// ============================================================
+//  LOADING HELPERS
+// ============================================================
+function showLoading(msg) {
+  document.getElementById('loading-msg').textContent = msg || 'Loading...';
+  document.getElementById('loading-overlay').classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('loading-overlay').classList.remove('show');
+}
+
+// ============================================================
+//  INIT — load all data from Supabase
+// ============================================================
+async function initApp() {
+  document.getElementById('header-date').textContent = new Date().toLocaleDateString('en-ZA', {weekday:'short', day:'numeric', month:'long', year:'numeric'});
+  document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
+  showLoading('Loading farm data...');
+  try {
+    await loadAllData();
+    buildGroupFilterChips();
+    renderAll();
+  } catch(e) {
+    showToast('Failed to load data: ' + e.message, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function loadAllData() {
+  const [entriesRes, assetsRes, groupsRes] = await Promise.all([
+    db.from('entries').select('*').order('date', { ascending: false }),
+    db.from('assets').select('*'),
+    db.from('groups').select('*')
+  ]);
+  if (entriesRes.error) throw entriesRes.error;
+  if (assetsRes.error)  throw assetsRes.error;
+  if (groupsRes.error)  throw groupsRes.error;
+
+  // Map DB columns back to app's camelCase format
+  state.entries = entriesRes.data.map(e => ({
+    id:              e.id,
+    date:            e.date,
+    assetId:         e.asset_id,
+    type:            e.type,
+    litres:          parseFloat(e.litres),
+    prevReading:     e.prev_reading != null ? parseFloat(e.prev_reading) : null,
+    currReading:     e.curr_reading != null ? parseFloat(e.curr_reading) : null,
+    consumptionVal:  e.consumption_val != null ? parseFloat(e.consumption_val) : null,
+    consumptionUnit: e.consumption_unit || null,
+    notes:           e.notes || ''
+  }));
+
+  state.assets = assetsRes.data.map(a => ({
+    id:                  a.id,
+    desc:                a.description || '',
+    measureType:         a.measure_type || 'HOURS',
+    readingMode:         a.reading_mode || 'BOWSER_ONLY',
+    group:               a.group_name   || 'Ungrouped',
+    serviceInterval:     parseFloat(a.service_interval) || 0,
+    lastServiceReading:  a.last_service_reading != null ? parseFloat(a.last_service_reading) : null,
+    serviceHistory:      Array.isArray(a.service_history) ? a.service_history : [],
+    manualReadings:      Array.isArray(a.manual_readings)  ? a.manual_readings  : []
+  }));
+
+  state.groups = groupsRes.data.map(g => g.name);
+  if (!state.groups.includes('Ungrouped')) state.groups.unshift('Ungrouped');
+}
+
+// ============================================================
+//  NAVIGATION
+// ============================================================
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  const names = ['log','entry','fleet','status','summary'];
+  document.querySelectorAll('.tab')[names.indexOf(name)].classList.add('active');
+  if (name === 'log')     renderLog();
+  if (name === 'fleet')   { buildGroupFilterChips(); renderFleet(); }
+  if (name === 'summary') renderSummary();
+  if (name === 'status')  { buildGroupFilterChips(); renderStatus(); }
+  if (name === 'entry')   populateAssetSelect();
+}
+
+// ============================================================
+//  ENTRY FORM
+// ============================================================
+function setType(t) {
+  currentEntryType = t;
+  document.getElementById('btn-in').classList.toggle('active', t === 'IN');
+  document.getElementById('btn-out').classList.toggle('active', t === 'OUT');
+  document.getElementById('asset-row').style.display = t === 'OUT' ? '' : 'none';
+  document.getElementById('km-fields').style.display = 'none';
+  document.getElementById('hr-fields').style.display = 'none';
+  document.getElementById('consumption-display').classList.remove('visible');
+  document.getElementById('f-asset').value = '';
+}
+
+function populateAssetSelect() {
+  const sel = document.getElementById('f-asset');
+  sel.innerHTML = '<option value="">Select asset...</option>';
+  state.assets.filter(a => a.readingMode !== 'MANUAL_ONLY').forEach(a => {
+    const opt = document.createElement('option');
+    opt.value = a.id;
+    opt.textContent = a.id + (a.desc ? ' — ' + a.desc : '');
+    sel.appendChild(opt);
+  });
+  // rebuild log filter chips
+  const fr = document.getElementById('filter-row');
+  fr.innerHTML = '<div class="filter-chip active" onclick="setFilter(\'all\',this)">All</div><div class="filter-chip" onclick="setFilter(\'TANK\',this)">🛢 Tank In</div>';
+  state.assets.forEach(a => {
+    const c = document.createElement('div');
+    c.className = 'filter-chip';
+    c.textContent = a.id;
+    c.onclick = function() { setFilter(a.id, this); };
+    fr.appendChild(c);
+  });
+}
+
+function onAssetChange() {
+  const id    = document.getElementById('f-asset').value;
+  const asset = state.assets.find(a => a.id === id);
+  const mode  = asset ? asset.readingMode : 'BOWSER_ONLY';
+  const show  = mode !== 'MANUAL_ONLY';
+  document.getElementById('km-fields').style.display = (show && asset && asset.measureType === 'KM')    ? '' : 'none';
+  document.getElementById('hr-fields').style.display = (show && asset && asset.measureType === 'HOURS') ? '' : 'none';
+  document.getElementById('consumption-display').classList.remove('visible');
+  if (show && asset) {
+    const prev = state.entries.filter(e => e.assetId === id && e.type === 'OUT' && e.currReading != null)
+                              .reduce((b, e) => (!b || e.currReading > b.currReading) ? e : b, null);
+    if (prev && asset.measureType === 'KM')    document.getElementById('f-km-prev').value = prev.currReading;
+    if (prev && asset.measureType === 'HOURS') document.getElementById('f-hr-prev').value = prev.currReading;
+  }
+}
+
+function calcConsumption() {
+  const litres  = parseFloat(document.getElementById('f-litres').value) || 0;
+  const display = document.getElementById('consumption-display');
+  if (currentEntryType !== 'OUT' || litres === 0) { display.classList.remove('visible'); return; }
+  const asset = state.assets.find(a => a.id === document.getElementById('f-asset').value);
+  if (!asset || asset.readingMode === 'MANUAL_ONLY') { display.classList.remove('visible'); return; }
+  const hasPrev = state.entries.some(e => e.assetId === asset.id && e.type === 'OUT' && e.currReading != null);
+  if (!hasPrev) { display.classList.remove('visible'); return; }
+  if (asset.measureType === 'KM') {
+    const prev = parseFloat(document.getElementById('f-km-prev').value) || 0;
+    const curr = parseFloat(document.getElementById('f-km-curr').value) || 0;
+    if (curr > prev) { document.getElementById('consumption-value').textContent = ((curr-prev)/litres).toFixed(2)+' km/L  ('+(litres/(curr-prev)*100).toFixed(2)+' L/100km)'; display.classList.add('visible'); }
+  } else if (asset.measureType === 'HOURS') {
+    const prev = parseFloat(document.getElementById('f-hr-prev').value) || 0;
+    const curr = parseFloat(document.getElementById('f-hr-curr').value) || 0;
+    if (curr > prev) { document.getElementById('consumption-value').textContent = (litres/(curr-prev)).toFixed(2)+' L/hr'; display.classList.add('visible'); }
+  }
+}
+
+async function saveEntry() {
+  const date   = document.getElementById('f-date').value;
+  const litres = parseFloat(document.getElementById('f-litres').value);
+  if (!date || isNaN(litres) || litres <= 0) { showToast('Please fill in date and litres', 'error'); return; }
+
+  let assetId = 'TANK', prevReading = null, currReading = null, consumptionVal = null, consumptionUnit = null;
+
+  if (currentEntryType === 'OUT') {
+    assetId = document.getElementById('f-asset').value;
+    if (!assetId) { showToast('Please select an asset', 'error'); return; }
+    const asset = state.assets.find(a => a.id === assetId);
+    const show  = asset && asset.readingMode !== 'MANUAL_ONLY';
+    if (show && asset.measureType === 'KM') {
+      prevReading = parseFloat(document.getElementById('f-km-prev').value) || null;
+      currReading = parseFloat(document.getElementById('f-km-curr').value) || null;
+      if (currReading && prevReading && currReading > prevReading) { consumptionVal = (currReading-prevReading)/litres; consumptionUnit = 'km/L'; }
+    } else if (show && asset.measureType === 'HOURS') {
+      prevReading = parseFloat(document.getElementById('f-hr-prev').value) || null;
+      currReading = parseFloat(document.getElementById('f-hr-curr').value) || null;
+      if (currReading && prevReading && currReading > prevReading) { consumptionVal = litres/(currReading-prevReading); consumptionUnit = 'L/hr'; }
+    }
+  }
+
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+
+  const { data, error } = await db.from('entries').insert([{
+    date, asset_id: assetId, type: currentEntryType, litres,
+    prev_reading: prevReading, curr_reading: currReading,
+    consumption_val: consumptionVal, consumption_unit: consumptionUnit,
+    notes: document.getElementById('f-notes').value.trim()
+  }]).select().single();
+
+  btn.disabled = false; btn.textContent = 'Save Entry';
+
+  if (error) { showToast('Save failed: ' + error.message, 'error'); return; }
+
+  state.entries.unshift({
+    id: data.id, date, assetId, type: currentEntryType, litres,
+    prevReading, currReading, consumptionVal, consumptionUnit,
+    notes: data.notes || ''
+  });
+
+  ['f-litres','f-notes','f-km-prev','f-km-curr','f-hr-prev','f-hr-curr'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('consumption-display').classList.remove('visible');
+  showToast('✅ Entry saved!', 'success');
+  showPage('log');
+}
+
+// ============================================================
+//  RENDER LOG
+// ============================================================
+function setFilter(f, el) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  renderLog();
+}
+
+function renderLog() {
+  const sorted   = [...state.entries].sort((a,b) => new Date(b.date) - new Date(a.date));
+  const filtered = currentFilter === 'all' ? sorted : sorted.filter(e => e.assetId === currentFilter || (currentFilter === 'TANK' && e.type === 'IN'));
+  document.getElementById('log-count').textContent = filtered.length + ' entries';
+  const list = document.getElementById('log-list');
+  if (!filtered.length) { list.innerHTML = '<div class="empty-state"><div class="es-icon">📋</div><p>No entries yet.<br>Tap ➕ Entry to add your first record.</p></div>'; return; }
+  list.innerHTML = filtered.map(e => {
+    const asset   = state.assets.find(a => a.id === e.assetId);
+    const isIn    = e.type === 'IN';
+    const icon    = isIn ? '🛢' : getAssetIcon(asset);
+    const name    = isIn ? 'Tank Refill' : (e.assetId + (asset?.desc ? ' — '+asset.desc : ''));
+    const clr     = isIn ? 'in-color' : 'out-color';
+    const cons    = e.consumptionVal ? e.consumptionVal.toFixed(2)+' '+e.consumptionUnit : '';
+    const meta    = [formatDate(e.date), e.notes].filter(Boolean).join(' · ');
+    return `<div class="log-item" onclick="showDetail(${e.id})">
+      <div class="badge ${isIn?'in':'out'}">${icon}</div>
+      <div class="info">
+        <div class="name">${name}</div>
+        <div class="meta">${meta}</div>
+        ${e.currReading ? `<div class="meta">${e.prevReading||0} → ${e.currReading} ${e.consumptionUnit==='km/L'?'km':'hrs'}</div>` : ''}
+      </div>
+      <div class="amounts">
+        <div class="litres ${clr}">${isIn?'+':'-'}${e.litres.toFixed(1)} L</div>
+        ${cons ? `<div class="consumption">${cons}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const tankIn  = state.entries.filter(e => e.type==='IN').reduce((s,e)=>s+e.litres,0);
+  const tankOut = state.entries.filter(e => e.type==='OUT').reduce((s,e)=>s+e.litres,0);
+  document.getElementById('stat-tank').textContent = Math.max(0,tankIn-tankOut).toFixed(0)+' L';
+  const now = new Date();
+  const mo  = state.entries.filter(e => { const d=new Date(e.date); return e.type==='OUT' && d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); }).reduce((s,e)=>s+e.litres,0);
+  document.getElementById('stat-month').textContent = mo.toFixed(0)+' L';
+}
+
+// ============================================================
+//  DETAIL / EDIT / DELETE
+// ============================================================
+function showDetail(id) {
+  selectedEntryId = id;
+  switchToView();
+  const e = state.entries.find(x => x.id === id);
+  if (!e) return;
+  const asset = state.assets.find(a => a.id === e.assetId);
+  document.getElementById('detail-title').textContent = e.type==='IN' ? 'Tank Refill' : e.assetId+' Fuel Entry';
+  document.getElementById('detail-body').innerHTML = `
+    <table style="width:100%;font-size:14px;border-collapse:collapse">
+      <tr><td style="color:var(--muted);padding:6px 0">Date</td><td style="text-align:right;font-weight:600">${formatDate(e.date)}</td></tr>
+      <tr><td style="color:var(--muted);padding:6px 0">Type</td><td style="text-align:right">${e.type==='IN'?'🟢 Fuel IN':'🔵 Fuel OUT'}</td></tr>
+      <tr><td style="color:var(--muted);padding:6px 0">Asset</td><td style="text-align:right">${e.assetId}${asset?.desc?' – '+asset.desc:''}</td></tr>
+      <tr><td style="color:var(--muted);padding:6px 0">Litres</td><td style="text-align:right;font-size:18px;font-weight:700;color:var(--accent)">${e.litres.toFixed(2)} L</td></tr>
+      ${e.prevReading!=null?`<tr><td style="color:var(--muted);padding:6px 0">Prev Reading</td><td style="text-align:right">${e.prevReading}</td></tr>`:''}
+      ${e.currReading!=null?`<tr><td style="color:var(--muted);padding:6px 0">Curr Reading</td><td style="text-align:right">${e.currReading}</td></tr>`:''}
+      ${e.consumptionVal?`<tr><td style="color:var(--muted);padding:6px 0">Consumption</td><td style="text-align:right;color:var(--accent2);font-weight:600">${e.consumptionVal.toFixed(2)} ${e.consumptionUnit}</td></tr>`:''}
+      ${e.notes?`<tr><td style="color:var(--muted);padding:6px 0">Notes</td><td style="text-align:right">${e.notes}</td></tr>`:''}
+    </table>`;
+  document.getElementById('detail-modal').classList.add('open');
+}
+function switchToView() { document.getElementById('detail-view').style.display=''; document.getElementById('detail-edit').style.display='none'; }
+function switchToEdit() {
+  const e = state.entries.find(x => x.id === selectedEntryId); if (!e) return;
+  const asset = state.assets.find(a => a.id === e.assetId);
+  document.getElementById('edit-date').value   = e.date;
+  document.getElementById('edit-litres').value = e.litres;
+  document.getElementById('edit-notes').value  = e.notes || '';
+  const isKM = asset && asset.measureType==='KM', isHR = asset && asset.measureType==='HOURS';
+  document.getElementById('edit-km-fields').style.display = isKM ? '' : 'none';
+  document.getElementById('edit-hr-fields').style.display = isHR ? '' : 'none';
+  if (isKM) { document.getElementById('edit-km-prev').value = e.prevReading??''; document.getElementById('edit-km-curr').value = e.currReading??''; }
+  if (isHR) { document.getElementById('edit-hr-prev').value = e.prevReading??''; document.getElementById('edit-hr-curr').value = e.currReading??''; }
+  document.getElementById('edit-consumption-display').classList.remove('visible');
+  calcEditConsumption();
+  document.getElementById('detail-view').style.display='none'; document.getElementById('detail-edit').style.display='';
+}
+function calcEditConsumption() {
+  const e = state.entries.find(x => x.id===selectedEntryId);
+  const asset = e ? state.assets.find(a => a.id===e.assetId) : null;
+  const litres = parseFloat(document.getElementById('edit-litres').value)||0;
+  const disp = document.getElementById('edit-consumption-display');
+  if (!asset||litres===0){disp.classList.remove('visible');return;}
+  if (asset.measureType==='KM'){const p=parseFloat(document.getElementById('edit-km-prev').value)||0,c=parseFloat(document.getElementById('edit-km-curr').value)||0;if(c>p){document.getElementById('edit-consumption-value').textContent=((c-p)/litres).toFixed(2)+' km/L';disp.classList.add('visible');}else disp.classList.remove('visible');}
+  else if(asset.measureType==='HOURS'){const p=parseFloat(document.getElementById('edit-hr-prev').value)||0,c=parseFloat(document.getElementById('edit-hr-curr').value)||0;if(c>p){document.getElementById('edit-consumption-value').textContent=(litres/(c-p)).toFixed(2)+' L/hr';disp.classList.add('visible');}else disp.classList.remove('visible');}
+}
+async function saveEdit() {
+  const e = state.entries.find(x => x.id===selectedEntryId); if (!e) return;
+  const asset  = state.assets.find(a => a.id===e.assetId);
+  const date   = document.getElementById('edit-date').value;
+  const litres = parseFloat(document.getElementById('edit-litres').value);
+  if (!date||isNaN(litres)||litres<=0){showToast('Check date and litres','error');return;}
+  let prevReading=null,currReading=null,consumptionVal=null,consumptionUnit=null;
+  if(asset&&asset.measureType==='KM'){prevReading=parseFloat(document.getElementById('edit-km-prev').value)||null;currReading=parseFloat(document.getElementById('edit-km-curr').value)||null;if(currReading&&prevReading&&currReading>prevReading){consumptionVal=(currReading-prevReading)/litres;consumptionUnit='km/L';}}
+  else if(asset&&asset.measureType==='HOURS'){prevReading=parseFloat(document.getElementById('edit-hr-prev').value)||null;currReading=parseFloat(document.getElementById('edit-hr-curr').value)||null;if(currReading&&prevReading&&currReading>prevReading){consumptionVal=litres/(currReading-prevReading);consumptionUnit='L/hr';}}
+  const notes = document.getElementById('edit-notes').value.trim();
+  showLoading('Saving...');
+  const {error} = await db.from('entries').update({date,litres,prev_reading:prevReading,curr_reading:currReading,consumption_val:consumptionVal,consumption_unit:consumptionUnit,notes}).eq('id',selectedEntryId);
+  hideLoading();
+  if(error){showToast('Update failed: '+error.message,'error');return;}
+  Object.assign(e,{date,litres,prevReading,currReading,consumptionVal,consumptionUnit,notes});
+  renderAll(); closeModal('detail-modal'); showToast('✅ Entry updated!','success');
+}
+async function deleteEntry() {
+  showLoading('Deleting...');
+  const {error} = await db.from('entries').delete().eq('id',selectedEntryId);
+  hideLoading();
+  if(error){showToast('Delete failed: '+error.message,'error');return;}
+  state.entries = state.entries.filter(e => e.id!==selectedEntryId);
+  renderAll(); closeModal('detail-modal'); showToast('Entry deleted','error');
+}
+
+// ============================================================
+//  GROUPS
+// ============================================================
+function buildGroupFilterChips() {
+  ['fleet-filter-row','status-filter-row'].forEach(rowId => {
+    const row = document.getElementById(rowId); if(!row) return;
+    const isFleet = rowId==='fleet-filter-row';
+    const cur = isFleet ? fleetFilter : statusFilter;
+    row.innerHTML='';
+    const all = document.createElement('div'); all.className='filter-chip'+(cur==='all'?' active':''); all.textContent='All';
+    all.onclick=()=>{if(isFleet)fleetFilter='all';else statusFilter='all';buildGroupFilterChips();if(isFleet)renderFleet();else renderStatus();};
+    row.appendChild(all);
+    state.groups.forEach(g=>{const c=document.createElement('div');c.className='filter-chip'+(cur===g?' active':'');c.textContent=g;c.onclick=()=>{if(isFleet)fleetFilter=g;else statusFilter=g;buildGroupFilterChips();if(isFleet)renderFleet();else renderStatus();};row.appendChild(c);});
+  });
+}
+function openManageGroups(){renderGroupsList();document.getElementById('groups-modal').classList.add('open');}
+function renderGroupsList(){
+  document.getElementById('groups-list').innerHTML=state.groups.map(g=>{
+    const cnt=state.assets.filter(a=>(a.group||'Ungrouped')===g).length;
+    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${g}</div><div style="font-size:11px;color:var(--muted)">${cnt} asset${cnt!==1?'s':''}</div></div>${g!=='Ungrouped'?`<button onclick="deleteGroup('${g}')" style="background:none;border:none;color:var(--red);font-size:18px;cursor:pointer">🗑</button>`:'<span style="font-size:11px;color:var(--muted)">default</span>'}</div>`;
+  }).join('');
+}
+async function addGroup(){
+  const name=document.getElementById('new-group-name').value.trim();
+  if(!name)return;
+  if(state.groups.includes(name)){showToast('Group already exists','error');return;}
+  const {error}=await db.from('groups').insert([{name}]);
+  if(error){showToast('Failed: '+error.message,'error');return;}
+  state.groups.push(name);
+  renderGroupsList();buildGroupFilterChips();refreshGroupDropdown();
+  document.getElementById('new-group-name').value='';
+  showToast('✅ Group "'+name+'" added','success');
+}
+async function deleteGroup(name){
+  if(name==='Ungrouped')return;
+  const cnt=state.assets.filter(a=>(a.group||'Ungrouped')===name).length;
+  // move assets to Ungrouped in DB
+  if(cnt>0) await db.from('assets').update({group_name:'Ungrouped'}).eq('group_name',name);
+  await db.from('groups').delete().eq('name',name);
+  state.assets.forEach(a=>{if((a.group||'Ungrouped')===name)a.group='Ungrouped';});
+  state.groups=state.groups.filter(g=>g!==name);
+  if(fleetFilter===name)fleetFilter='all';
+  if(statusFilter===name)statusFilter='all';
+  renderGroupsList();buildGroupFilterChips();refreshGroupDropdown();renderFleet();
+  showToast('Group deleted'+(cnt>0?', '+cnt+' asset(s) moved to Ungrouped':''),'error');
+}
+function refreshGroupDropdown(){
+  const sel=document.getElementById('na-group');if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML=state.groups.map(g=>`<option value="${g}">${g}</option>`).join('');
+  if(cur&&state.groups.includes(cur))sel.value=cur;
+}
+
+// ============================================================
+//  MANUAL READINGS
+// ============================================================
+function openManualReading(assetId){
+  manualReadingAssetId=assetId; editingManualReadingId=null;
+  const a=state.assets.find(x=>x.id===assetId);
+  const unit=a.measureType==='KM'?'km':'hrs';
+  const latest=getLatestReading(assetId);
+  document.getElementById('mr-title').textContent='Add Reading — '+assetId;
+  document.getElementById('mr-subtitle').textContent=(a.desc||assetId)+' · Current: '+(latest!=null?latest.toFixed(0)+' '+unit:'none');
+  document.getElementById('mr-reading-label').textContent='Reading ('+unit+')';
+  document.getElementById('mr-date').value=new Date().toISOString().split('T')[0];
+  document.getElementById('mr-reading').value='';
+  document.getElementById('mr-notes').value='';
+  document.getElementById('mr-delete-btn').style.display='none';
+  document.getElementById('manual-reading-modal').classList.add('open');
+}
+function editManualReading(assetId,rid){
+  manualReadingAssetId=assetId; editingManualReadingId=rid;
+  const a=state.assets.find(x=>x.id===assetId);
+  const r=a.manualReadings.find(x=>x.rid===rid); if(!r)return;
+  const unit=a.measureType==='KM'?'km':'hrs';
+  document.getElementById('mr-title').textContent='Edit Reading — '+assetId;
+  document.getElementById('mr-subtitle').textContent=a.desc||assetId;
+  document.getElementById('mr-reading-label').textContent='Reading ('+unit+')';
+  document.getElementById('mr-date').value=r.date;
+  document.getElementById('mr-reading').value=r.reading;
+  document.getElementById('mr-notes').value=r.notes||'';
+  document.getElementById('mr-delete-btn').style.display='';
+  document.getElementById('manual-reading-modal').classList.add('open');
+}
+async function saveManualReading(){
+  const a=state.assets.find(x=>x.id===manualReadingAssetId); if(!a)return;
+  const date=document.getElementById('mr-date').value;
+  const reading=parseFloat(document.getElementById('mr-reading').value);
+  const notes=document.getElementById('mr-notes').value.trim();
+  if(!date){showToast('Please enter a date','error');return;}
+  if(isNaN(reading)||reading<=0){showToast('Please enter a reading','error');return;}
+  if(!a.manualReadings)a.manualReadings=[];
+  if(editingManualReadingId!==null){
+    const r=a.manualReadings.find(x=>x.rid===editingManualReadingId);
+    if(r){r.date=date;r.reading=reading;r.notes=notes;}
+  } else {
+    a.manualReadings.push({rid:Date.now(),date,reading,notes});
+  }
+  showLoading('Saving...');
+  const {error}=await db.from('assets').update({manual_readings:a.manualReadings}).eq('id',a.id);
+  hideLoading();
+  if(error){showToast('Save failed: '+error.message,'error');return;}
+  closeModal('manual-reading-modal');renderFleet();
+  showToast('✅ Reading saved','success');
+}
+async function deleteManualReading(){
+  const a=state.assets.find(x=>x.id===manualReadingAssetId); if(!a)return;
+  a.manualReadings=a.manualReadings.filter(r=>r.rid!==editingManualReadingId);
+  const {error}=await db.from('assets').update({manual_readings:a.manualReadings}).eq('id',a.id);
+  if(error){showToast('Delete failed: '+error.message,'error');return;}
+  closeModal('manual-reading-modal');renderFleet();showToast('Reading deleted','error');
+}
+
+// ============================================================
+//  FLEET
+// ============================================================
+function getAssetIcon(asset){
+  if(!asset)return'🔧';
+  const d=(asset.desc||'').toLowerCase();
+  if(d.includes('tractor'))return'🚜';
+  if(d.includes('bakkie')||d.includes('ford')||d.includes('hilux')||d.includes('ranger'))return'🛻';
+  if(d.includes('gen')||d.includes('pump'))return'⚙️';
+  if(d.includes('spray')||d.includes('boom'))return'🌿';
+  return asset.measureType==='KM'?'🚗':'🔧';
+}
+function renderFleet(){
+  const list=document.getElementById('fleet-list');
+  if(!state.assets.length){list.innerHTML='<div class="empty-state"><div class="es-icon">🚜</div><p>No assets yet.</p></div>';return;}
+  const filtered=fleetFilter==='all'?state.assets:state.assets.filter(a=>(a.group||'Ungrouped')===fleetFilter);
+  if(!filtered.length){list.innerHTML='<div class="empty-state"><div class="es-icon">🚜</div><p>No assets in this group.</p></div>';return;}
+  list.innerHTML=filtered.map(a=>{
+    const entries=state.entries.filter(e=>e.assetId===a.id&&e.type==='OUT');
+    const totalL=entries.reduce((s,e)=>s+e.litres,0);
+    const lastReading=getLatestReading(a.id)||0;
+    const consEntries=entries.filter(e=>e.consumptionVal);
+    const avg=consEntries.length?consEntries.reduce((s,e)=>s+e.consumptionVal,0)/consEntries.length:null;
+    const unit=a.measureType==='KM'?'km':a.measureType==='HOURS'?'hrs':'';
+    let serviceHTML='';
+    if(a.serviceInterval>0&&a.measureType!=='NONE'){
+      const nextDue=(a.lastServiceReading||0)+a.serviceInterval;
+      const since=lastReading-(a.lastServiceReading||0);
+      const remaining=nextDue-lastReading;
+      const progress=Math.min(Math.max(since,0)/a.serviceInterval*100,100);
+      const barClass=progress<70?'ok':progress<90?'warn':'over';
+      const remColor=remaining>a.serviceInterval*0.3?'var(--green)':remaining>a.serviceInterval*0.1?'var(--accent)':'var(--red)';
+      const remText=remaining>0?`${remaining.toFixed(0)} ${unit} to go`:`OVERDUE by ${Math.abs(remaining).toFixed(0)} ${unit}`;
+      const statusIcon=remaining>a.serviceInterval*0.3?'✅':remaining>0?'⚠️':'🔴';
+      serviceHTML=`<div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">🔧 Service Tracker</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div style="background:var(--surface2);border-radius:8px;padding:10px"><div style="font-size:10px;color:var(--muted);margin-bottom:3px">Current Reading</div><div style="font-size:16px;font-weight:700">${lastReading>0?lastReading.toFixed(0)+' '+unit:'No entries yet'}</div></div>
+          <div style="background:var(--surface2);border-radius:8px;padding:10px"><div style="font-size:10px;color:var(--muted);margin-bottom:3px">Next Service Due</div><div style="font-size:16px;font-weight:700;color:var(--accent2)">${a.lastServiceReading!=null?nextDue.toFixed(0)+' '+unit:'—'}</div></div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+          <div><div style="font-size:10px;color:var(--muted);margin-bottom:3px">Remaining</div><div style="font-size:18px;font-weight:700;color:${remColor}">${a.lastServiceReading!=null?remText:'—'}</div></div>
+          <div style="font-size:28px">${a.lastServiceReading!=null?statusIcon:''}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+          <span>Last: ${a.lastServiceReading!=null?a.lastServiceReading.toFixed(0)+' '+unit:'None'}</span>
+          <span>${Math.round(progress)}% used</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill ${barClass}" style="width:${progress}%"></div></div>
+        ${a.serviceHistory&&a.serviceHistory.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px"><div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Service History</div>${[...a.serviceHistory].reverse().map((s,ri)=>{const num=a.serviceHistory.length-ri;const ms=num*(a.serviceInterval||0);return`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)"><span>🔧</span><div style="flex:1"><div style="font-size:13px;font-weight:600">${ms.toLocaleString()} ${unit} service</div><div style="font-size:11px;color:var(--muted)">${formatDate(s.date)}${s.notes?' · '+s.notes:''}</div></div><div style="font-size:12px;color:var(--muted)">at ${s.reading.toFixed(0)} ${unit}</div></div>`;}).join('')}</div>
+        <button onclick="clearServiceHistory('${a.id}')" style="margin-top:6px;width:100%;padding:9px;background:none;border:1px solid var(--red);color:var(--red);border-radius:8px;font-size:13px;cursor:pointer">🗑 Clear History</button>`:''}
+        ${(a.readingMode==='MANUAL_ONLY'||a.readingMode==='BOWSER_MANUAL')?`
+          ${a.manualReadings&&a.manualReadings.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px"><div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px">Reading Log</div>${[...a.manualReadings].sort((x,y)=>y.reading-x.reading).map(r=>`<div onclick="editManualReading('${a.id}',${r.rid||0})" style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);cursor:pointer"><div><div style="font-size:13px;font-weight:600">${r.reading.toFixed(0)} ${unit}</div><div style="font-size:11px;color:var(--muted)">${formatDate(r.date)}${r.notes?' · '+r.notes:''}</div></div><div style="font-size:18px;color:var(--muted)">›</div></div>`).join('')}</div>`:''}
+          <button onclick="openManualReading('${a.id}')" style="margin-top:10px;width:100%;padding:9px;background:none;border:1px solid var(--blue);color:var(--blue);border-radius:8px;font-size:13px;cursor:pointer">📍 Add Reading...</button>`:''}
+        <button onclick="openServiceModal('${a.id}')" style="margin-top:10px;width:100%;padding:9px;background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;font-size:13px;cursor:pointer">🔧 Log a Service...</button>
+      </div>`;
+    }
+    return`<div class="asset-card">
+      <div class="asset-header">
+        <div class="asset-name">${getAssetIcon(a)} ${a.id}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="asset-type">${a.measureType}</div>
+          <button onclick="openEditAsset('${a.id}')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">✏️</button>
+          <button onclick="openDeleteAsset('${a.id}')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">🗑</button>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="font-size:12px;color:var(--muted)">${a.desc||''}</div>
+        <div style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--border);color:var(--muted)">${a.readingMode==='MANUAL_ONLY'?'📍 Manual':a.readingMode==='BOWSER_MANUAL'?'⛽📍 Both':'⛽ Bowser'}</div>
+        <div style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--surface2);color:var(--muted)">${a.group||'Ungrouped'}</div>
+      </div>
+      <div class="asset-stats">
+        <div class="a-stat"><div class="al">Total Fuel</div><div class="av" style="color:var(--accent)">${totalL.toFixed(0)}L</div></div>
+        <div class="a-stat"><div class="al">Fills</div><div class="av">${entries.length}</div></div>
+        <div class="a-stat"><div class="al">Avg</div><div class="av" style="color:var(--accent2)">${avg?avg.toFixed(2)+(a.measureType==='KM'?' km/L':' L/h'):'—'}</div></div>
+      </div>
+      ${serviceHTML}
+    </div>`;
+  }).join('');
+}
+
+function getLatestReading(assetId){
+  const asset=state.assets.find(a=>a.id===assetId);
+  const mode=asset?asset.readingMode:'BOWSER_ONLY';
+  let fuel=null,manual=null;
+  if(mode!=='MANUAL_ONLY'){const e=state.entries.filter(e=>e.assetId===assetId&&e.type==='OUT'&&e.currReading!=null);if(e.length)fuel=e.reduce((b,e)=>e.currReading>(b?.currReading||0)?e:b,null)?.currReading??null;}
+  if(mode!=='BOWSER_ONLY'&&asset.manualReadings&&asset.manualReadings.length)manual=asset.manualReadings.reduce((b,r)=>r.reading>(b?.reading||0)?r:b,null)?.reading??null;
+  if(fuel!=null&&manual!=null)return Math.max(fuel,manual);
+  return fuel??manual??null;
+}
+
+function getMilestoneLabel(a,num){return(num*(a.serviceInterval||0)).toLocaleString()+' '+(a.measureType==='KM'?'km':'hrs')+' service';}
+
+function openServiceModal(assetId){
+  serviceAssetId=assetId;
+  const a=state.assets.find(x=>x.id===assetId);
+  const unit=a.measureType==='KM'?'km':'hrs';
+  const latest=getLatestReading(assetId);
+  const num=(a.serviceHistory?a.serviceHistory.length:0)+1;
+  document.getElementById('svc-title').textContent='Log Service — '+assetId;
+  document.getElementById('svc-subtitle').textContent=(a.desc||assetId)+' · Every '+a.serviceInterval.toLocaleString()+' '+unit;
+  document.getElementById('svc-milestone-label').textContent='Service #'+num+' — '+getMilestoneLabel(a,num);
+  document.getElementById('svc-reading-label').textContent='Reading at Service ('+unit+')';
+  document.getElementById('svc-current-reading').value=latest!=null?latest.toFixed(0):'';
+  document.getElementById('svc-next-due').textContent=latest!=null?(latest+a.serviceInterval).toLocaleString()+' '+unit:'—';
+  document.getElementById('svc-date').value=new Date().toISOString().split('T')[0];
+  document.getElementById('svc-notes').value='';
+  document.getElementById('service-modal').classList.add('open');
+}
+function updateSvcNextDue(){
+  const a=state.assets.find(x=>x.id===serviceAssetId);if(!a)return;
+  const unit=a.measureType==='KM'?'km':'hrs';
+  const r=parseFloat(document.getElementById('svc-current-reading').value);
+  document.getElementById('svc-next-due').textContent=!isNaN(r)&&r>0?(r+a.serviceInterval).toLocaleString()+' '+unit:'—';
+}
+async function confirmService(){
+  const a=state.assets.find(x=>x.id===serviceAssetId);if(!a)return;
+  const date=document.getElementById('svc-date').value;
+  const notes=document.getElementById('svc-notes').value.trim();
+  if(!date){showToast('Please enter a date','error');return;}
+  const reading=parseFloat(document.getElementById('svc-current-reading').value);
+  if(isNaN(reading)||reading<=0){showToast('Please enter the reading','error');return;}
+  if(!a.serviceHistory)a.serviceHistory=[];
+  const num=a.serviceHistory.length+1;
+  a.serviceHistory.push({date,reading,svcNum:num,milestoneLabel:getMilestoneLabel(a,num),notes});
+  a.lastServiceReading=reading;
+  showLoading('Saving...');
+  const {error}=await db.from('assets').update({service_history:a.serviceHistory,last_service_reading:reading}).eq('id',a.id);
+  hideLoading();
+  if(error){showToast('Save failed: '+error.message,'error');return;}
+  closeModal('service-modal');renderFleet();showToast('✅ '+getMilestoneLabel(a,num)+' logged!','success');
+}
+async function clearServiceHistory(assetId){
+  const a=state.assets.find(x=>x.id===assetId);if(!a)return;
+  if(!confirm('Clear all service history for '+assetId+'?'))return;
+  a.serviceHistory=[];a.lastServiceReading=0;
+  await db.from('assets').update({service_history:[],last_service_reading:0}).eq('id',a.id);
+  renderFleet();showToast('Service history cleared','error');
+}
+function openDeleteAsset(assetId){
+  deleteAssetId=assetId;
+  const a=state.assets.find(x=>x.id===assetId);
+  document.getElementById('delete-asset-msg').textContent='Delete "'+assetId+(a?.desc?' — '+a.desc:'')+'" from your fleet? Fuel log entries will remain.';
+  document.getElementById('delete-asset-modal').classList.add('open');
+}
+async function confirmDeleteAsset(){
+  showLoading('Deleting...');
+  const {error}=await db.from('assets').delete().eq('id',deleteAssetId);
+  hideLoading();
+  if(error){showToast('Delete failed: '+error.message,'error');return;}
+  state.assets=state.assets.filter(a=>a.id!==deleteAssetId);
+  closeModal('delete-asset-modal');renderFleet();populateAssetSelect();showToast('Asset deleted','error');
+}
+
+function onAssetTypeChange(){
+  const type=document.getElementById('na-type').value;
+  document.getElementById('na-last-reading-label').textContent='Reading at Last Service ('+(type==='KM'?'km':'hrs')+')';
+  buildMilestoneDropdown();
+}
+function buildMilestoneDropdown(){
+  const interval=parseFloat(document.getElementById('na-interval').value)||0;
+  const type=document.getElementById('na-type').value;
+  const unit=type==='KM'?'km':'hrs';
+  const sel=document.getElementById('na-last-milestone');
+  sel.innerHTML='<option value="">— select milestone —</option>';
+  if(interval<=0)return;
+  for(let i=1;i<=20;i++){const v=i*interval;const opt=document.createElement('option');opt.value=i;opt.textContent=v.toLocaleString()+' '+unit+' service (service #'+i+')';sel.appendChild(opt);}
+  updateNextPreview();
+}
+function updateNextPreview(){
+  const interval=parseFloat(document.getElementById('na-interval').value)||0;
+  const lr=parseFloat(document.getElementById('na-last-reading').value);
+  const type=document.getElementById('na-type').value;
+  const unit=type==='KM'?'km':'hrs';
+  if(!isNaN(lr)&&lr>0&&interval>0){document.getElementById('na-next-val').textContent=(lr+interval).toLocaleString()+' '+unit;document.getElementById('na-next-preview').style.display='';}
+  else document.getElementById('na-next-preview').style.display='none';
+}
+function openAddAsset(){
+  editingAssetId=null;
+  document.getElementById('asset-modal-title').textContent='Add Asset';
+  document.getElementById('na-id').value='';
+  document.getElementById('na-id').readOnly=false;
+  document.getElementById('na-desc').value='';
+  document.getElementById('na-type').value='HOURS';
+  document.getElementById('na-readingMode').value='BOWSER_ONLY';
+  document.getElementById('na-interval').value='250';
+  refreshGroupDropdown();
+  document.getElementById('na-group').value='Ungrouped';
+  document.getElementById('na-last-reading').value='';
+  document.getElementById('na-last-service-section').style.display='';
+  document.getElementById('na-next-preview').style.display='none';
+  buildMilestoneDropdown();
+  document.getElementById('asset-modal').classList.add('open');
+}
+function openEditAsset(assetId){
+  editingAssetId=assetId;
+  const a=state.assets.find(x=>x.id===assetId);if(!a)return;
+  document.getElementById('asset-modal-title').textContent='Edit Asset';
+  document.getElementById('na-id').value=a.id;
+  document.getElementById('na-id').readOnly=true;
+  document.getElementById('na-desc').value=a.desc||'';
+  document.getElementById('na-type').value=a.measureType||'HOURS';
+  document.getElementById('na-readingMode').value=a.readingMode||'BOWSER_ONLY';
+  document.getElementById('na-interval').value=a.serviceInterval||0;
+  refreshGroupDropdown();
+  document.getElementById('na-group').value=a.group||'Ungrouped';
+  document.getElementById('na-last-service-section').style.display='none';
+  document.getElementById('asset-modal').classList.add('open');
+}
+async function saveAsset(){
+  const id=document.getElementById('na-id').value.trim().toUpperCase();
+  if(!id){showToast('Please enter an ID','error');return;}
+  if(editingAssetId){
+    const a=state.assets.find(x=>x.id===editingAssetId);if(!a)return;
+    const updates={description:document.getElementById('na-desc').value.trim(),measure_type:document.getElementById('na-type').value,reading_mode:document.getElementById('na-readingMode').value,group_name:document.getElementById('na-group').value||'Ungrouped',service_interval:parseFloat(document.getElementById('na-interval').value)||0};
+    showLoading('Saving...');
+    const {error}=await db.from('assets').update(updates).eq('id',editingAssetId);
+    hideLoading();
+    if(error){showToast('Save failed: '+error.message,'error');return;}
+    a.desc=updates.description;a.measureType=updates.measure_type;a.readingMode=updates.reading_mode;a.group=updates.group_name;a.serviceInterval=updates.service_interval;
+    renderFleet();populateAssetSelect();closeModal('asset-modal');showToast('✅ Asset updated!','success');
+  } else {
+    if(state.assets.find(a=>a.id===id)){showToast('Asset ID already exists','error');return;}
+    const interval=parseFloat(document.getElementById('na-interval').value)||0;
+    const lr=parseFloat(document.getElementById('na-last-reading').value);
+    const mnum=parseInt(document.getElementById('na-last-milestone').value)||0;
+    const type=document.getElementById('na-type').value;
+    const unit=type==='KM'?'km':'hrs';
+    let serviceHistory=[],lastServiceReading=null;
+    if(!isNaN(lr)&&lr>0&&mnum>0&&interval>0){lastServiceReading=lr;const mv=mnum*interval;serviceHistory.push({date:new Date().toISOString().split('T')[0],reading:lr,svcNum:mnum,milestoneLabel:mv.toLocaleString()+' '+unit+' service',notes:'Opening entry'});}
+    else if(!isNaN(lr)&&lr>0&&interval>0){lastServiceReading=lr;}
+    const newAsset={id,description:document.getElementById('na-desc').value.trim(),measure_type:type,reading_mode:document.getElementById('na-readingMode').value,group_name:document.getElementById('na-group').value||'Ungrouped',service_interval:interval,last_service_reading:lastServiceReading,service_history:serviceHistory,manual_readings:[]};
+    showLoading('Saving...');
+    const {error}=await db.from('assets').insert([newAsset]);
+    hideLoading();
+    if(error){showToast('Save failed: '+error.message,'error');return;}
+    state.assets.push({id,desc:newAsset.description,measureType:type,readingMode:newAsset.reading_mode,group:newAsset.group_name,serviceInterval:interval,lastServiceReading,serviceHistory,manualReadings:[]});
+    renderFleet();populateAssetSelect();closeModal('asset-modal');showToast('✅ Asset added!','success');
+  }
+}
+
+// ============================================================
+//  STATUS
+// ============================================================
+function renderStatus(){
+  const list=document.getElementById('status-list');
+  const all=state.assets.filter(a=>a.serviceInterval>0&&a.measureType!=='NONE');
+  const assets=statusFilter==='all'?all:all.filter(a=>(a.group||'Ungrouped')===statusFilter);
+  if(!assets.length){list.innerHTML='<div class="empty-state"><div class="es-icon">⚡</div><p>No assets with service intervals.</p></div>';return;}
+  list.innerHTML=assets.map(a=>{
+    const unit=a.measureType==='KM'?'km':'hrs';
+    const curr=getLatestReading(a.id)||0;
+    const last=a.lastServiceReading!=null?a.lastServiceReading:0;
+    const next=last+a.serviceInterval;
+    const remaining=next-curr;
+    const since=curr-last;
+    const progress=Math.min(Math.max(since,0)/a.serviceInterval*100,100);
+    const barClass=progress<70?'ok':progress<90?'warn':'over';
+    const remColor=progress<70?'var(--green)':progress<90?'var(--accent)':'var(--red)';
+    const dot=progress<70?'🟢':progress<90?'🟡':'🔴';
+    const remText=remaining>0?remaining.toFixed(0)+' '+unit+' to go':'OVERDUE '+Math.abs(remaining).toFixed(0)+' '+unit;
+    return`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;cursor:pointer" onclick="showPage('fleet')">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${dot}</span><div><div style="font-size:15px;font-weight:700">${getAssetIcon(a)} ${a.id}</div><div style="font-size:11px;color:var(--muted)">${a.desc||''}</div></div></div>
+        <div style="text-align:right"><div style="font-size:16px;font-weight:700;color:${remColor}">${remText}</div><div style="font-size:11px;color:var(--muted)">due at ${next.toLocaleString()} ${unit}</div></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px"><span>Last: ${last>0?last.toLocaleString()+' '+unit:'Not set'}</span><span>${Math.round(progress)}% used</span></div>
+      <div class="bar-track"><div class="bar-fill ${barClass}" style="width:${progress}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ============================================================
+//  SUMMARY
+// ============================================================
+function renderSummary(){
+  const totalIn=state.entries.filter(e=>e.type==='IN').reduce((s,e)=>s+e.litres,0);
+  const totalOut=state.entries.filter(e=>e.type==='OUT').reduce((s,e)=>s+e.litres,0);
+  document.getElementById('sum-in').textContent=totalIn.toFixed(0)+' L';
+  document.getElementById('sum-out').textContent=totalOut.toFixed(0)+' L';
+  document.getElementById('sum-total-in').textContent=totalIn.toFixed(0)+' L';
+  document.getElementById('sum-total-out').textContent=totalOut.toFixed(0)+' L';
+  document.getElementById('sum-stock').textContent=Math.max(0,totalIn-totalOut).toFixed(0)+' L';
+  const assetIds=[...new Set(state.entries.filter(e=>e.type==='OUT').map(e=>e.assetId))];
+  document.getElementById('summary-tbody').innerHTML=assetIds.map(id=>{
+    const ents=state.entries.filter(e=>e.assetId===id&&e.type==='OUT');
+    const L=ents.reduce((s,e)=>s+e.litres,0);
+    const ce=ents.filter(e=>e.consumptionVal);
+    const avg=ce.length?ce.reduce((s,e)=>s+e.consumptionVal,0)/ce.length:null;
+    const asset=state.assets.find(a=>a.id===id);
+    return`<tr><td>${id}</td><td>${L.toFixed(1)} L</td><td>${avg?avg.toFixed(2)+' '+(asset?.measureType==='KM'?'km/L':'L/hr'):'—'}</td></tr>`;
+  }).join('')||'<tr><td colspan="3" style="color:var(--muted);text-align:center">No data</td></tr>';
+  const monthly={};
+  state.entries.forEach(e=>{const k=e.date.slice(0,7);if(!monthly[k])monthly[k]={in:0,out:0};e.type==='IN'?(monthly[k].in+=e.litres):(monthly[k].out+=e.litres);});
+  document.getElementById('monthly-tbody').innerHTML=Object.keys(monthly).sort().reverse().map(m=>{
+    const d=new Date(m+'-01');
+    return`<tr><td>${d.toLocaleDateString('en-ZA',{month:'short',year:'numeric'})}</td><td style="color:var(--green)">${monthly[m].in.toFixed(0)}</td><td style="color:var(--blue)">${monthly[m].out.toFixed(0)}</td></tr>`;
+  }).join('')||'<tr><td colspan="3" style="color:var(--muted);text-align:center">No data</td></tr>';
+}
+
+// ============================================================
+//  EXCEL EXPORT
+// ============================================================
+function exportExcel(){
+  const wb=XLSX.utils.book_new();
+  const logData=[['Date','Asset_ID','Type','Litres','Prev_Reading','Curr_Reading','Consumption_Value','Consumption_Unit','Notes']];
+  [...state.entries].sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(e=>{logData.push([e.date,e.assetId,e.type,e.litres,e.prevReading||'',e.currReading||'',e.consumptionVal||'',e.consumptionUnit||'',e.notes||'']);});
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(logData),'Fuel Log');
+  const idData=[['Asset_ID','Description','Measure_Type','Service_Interval','Last_Service_Reading']];
+  state.assets.forEach(a=>idData.push([a.id,a.desc,a.measureType,a.serviceInterval,a.lastServiceReading]));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(idData),'IDs');
+  XLSX.writeFile(wb,'FarmFleetFuelLog_'+new Date().toISOString().split('T')[0]+'.xlsx');
+  showToast('📥 Excel exported!','success');
+}
+
+// ============================================================
+//  EXCEL IMPORT
+// ============================================================
+function openImport(){document.getElementById('import-modal').classList.add('open');}
+async function handleImport(event){
+  const file=event.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      showLoading('Importing...');
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const idSheet=wb.Sheets['IDs'];
+      if(idSheet){
+        const rows=XLSX.utils.sheet_to_json(idSheet);
+        for(const r of rows){
+          const id=String(r.Asset_ID||r.ID||'').trim().toUpperCase();
+          if(id&&!state.assets.find(a=>a.id===id)){
+            const na={id,description:r.Description||'',measure_type:r.Measure_Type||'HOURS',reading_mode:'BOWSER_ONLY',group_name:'Ungrouped',service_interval:parseFloat(r.Service_Interval)||250,last_service_reading:parseFloat(r.Last_Service_Reading)||0,service_history:[],manual_readings:[]};
+            await db.from('assets').insert([na]);
+            state.assets.push({id,desc:na.description,measureType:na.measure_type,readingMode:'BOWSER_ONLY',group:'Ungrouped',serviceInterval:na.service_interval,lastServiceReading:na.last_service_reading,serviceHistory:[],manualReadings:[]});
+          }
+        }
+      }
+      const logSheet=wb.Sheets['Fuel Log']||wb.Sheets[wb.SheetNames[0]];
+      let imported=0;
+      if(logSheet){
+        const rows=XLSX.utils.sheet_to_json(logSheet);
+        const toInsert=[];
+        rows.forEach(r=>{
+          const date=r.Date?(typeof r.Date==='number'?new Date((r.Date-25569)*86400*1000).toISOString().split('T')[0]:String(r.Date).trim()):null;
+          const assetId=String(r.Asset_ID||r.ID||r.asset_id||'').trim().toUpperCase();
+          const litres=parseFloat(r.Litres||r.litres||0);
+          if(!date||!assetId||isNaN(litres)||litres<=0)return;
+          const type=(assetId==='TANK'||String(r.Type||'').toUpperCase()==='IN')?'IN':'OUT';
+          const prev=parseFloat(r.Prev_Reading)||null;
+          const curr=parseFloat(r.Curr_Reading)||null;
+          let cv=null,cu=null;
+          if(prev&&curr&&curr>prev){const asset=state.assets.find(a=>a.id===assetId);if(asset?.measureType==='KM'){cv=(curr-prev)/litres;cu='km/L';}else if(asset?.measureType==='HOURS'){cv=litres/(curr-prev);cu='L/hr';}}
+          toInsert.push({date,asset_id:assetId,type,litres,prev_reading:prev,curr_reading:curr,consumption_val:cv,consumption_unit:cu,notes:r.Notes||''});
+          imported++;
+        });
+        if(toInsert.length){
+          const {data,error}=await db.from('entries').insert(toInsert).select();
+          if(!error&&data){data.forEach(e=>{state.entries.push({id:e.id,date:e.date,assetId:e.asset_id,type:e.type,litres:parseFloat(e.litres),prevReading:e.prev_reading?parseFloat(e.prev_reading):null,currReading:e.curr_reading?parseFloat(e.curr_reading):null,consumptionVal:e.consumption_val?parseFloat(e.consumption_val):null,consumptionUnit:e.consumption_unit||null,notes:e.notes||''});});}
+        }
+      }
+      hideLoading();buildGroupFilterChips();renderAll();closeModal('import-modal');
+      showToast('✅ Imported '+imported+' entries!','success');
+    }catch(err){hideLoading();showToast('Import failed: '+err.message,'error');}
+  };
+  reader.readAsArrayBuffer(file);
+  event.target.value='';
+}
+
+// ============================================================
+//  HELPERS
+// ============================================================
+function renderAll(){renderLog();populateAssetSelect();}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+function formatDate(d){if(!d)return'';return new Date(d+'T00:00:00').toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'});}
+function showToast(msg,type){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(type||'');setTimeout(()=>t.className='toast',2800);}
+document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',function(e){if(e.target===this)closeModal(this.id);}));
+document.addEventListener('DOMContentLoaded',()=>{document.getElementById('pw-input').focus();});
+</script>
+</body>
+</html>
