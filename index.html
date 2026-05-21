@@ -383,7 +383,7 @@
         <option value="NONE">None (generators, pumps)</option>
       </select>
     </div>
-    <div class="field" style="margin-bottom:10px"><label>Service Interval (hrs or km, 0 = none)</label><input type="number" id="na-interval" placeholder="250" value="250" oninput="buildMilestoneDropdown()"></div>
+    <div id="na-interval-section" style="margin-bottom:10px"><div class="field"><label>Service Interval (hrs or km, 0 = none)</label><input type="number" id="na-interval" placeholder="250" value="250" oninput="buildMilestoneDropdown()"></div></div>
     <div id="na-last-service-section" style="border-top:1px solid var(--border);margin-top:4px;padding-top:12px;margin-bottom:4px">
       <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Last Known Service (optional)</div>
       <div class="field" style="margin-bottom:10px"><label id="na-last-reading-label">Reading at Last Service (hrs)</label><input type="number" id="na-last-reading" placeholder="e.g. 1550" oninput="updateNextPreview()"></div>
@@ -638,7 +638,8 @@ function onAssetChange() {
   const id    = document.getElementById('f-asset').value;
   const asset = state.assets.find(a => a.id === id);
   const mode  = asset ? asset.readingMode : 'BOWSER_ONLY';
-  const show  = mode !== 'MANUAL_ONLY';
+  const isNone = asset && asset.measureType === 'NONE';
+  const show  = mode !== 'MANUAL_ONLY' && !isNone;
   document.getElementById('km-fields').style.display = (show && asset && asset.measureType === 'KM')    ? '' : 'none';
   document.getElementById('hr-fields').style.display = (show && asset && asset.measureType === 'HOURS') ? '' : 'none';
   document.getElementById('consumption-display').classList.remove('visible');
@@ -1000,7 +1001,7 @@ function renderFleet(){
           <span>${Math.round(progress)}% used</span>
         </div>
         <div class="bar-track"><div class="bar-fill ${barClass}" style="width:${progress}%"></div></div>
-        ${a.serviceHistory&&a.serviceHistory.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px"><div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Service History</div>${[...a.serviceHistory].reverse().map((s,ri)=>{const num=a.serviceHistory.length-ri;const ms=num*(a.serviceInterval||0);return`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)"><span>🔧</span><div style="flex:1"><div style="font-size:13px;font-weight:600">${ms.toLocaleString()} ${unit} service</div><div style="font-size:11px;color:var(--muted)">${formatDate(s.date)}${s.notes?' · '+s.notes:''}</div></div><div style="font-size:12px;color:var(--muted)">at ${s.reading.toFixed(0)} ${unit}</div></div>`;}).join('')}</div>
+        ${a.serviceHistory&&a.serviceHistory.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px"><div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Service History</div>${[...a.serviceHistory].map((s,i)=>{const label=getMilestoneLabel(a,getTrueServiceCount(a,i+1));return`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)"><span>🔧</span><div style="flex:1"><div style="font-size:13px;font-weight:600">${label}</div><div style="font-size:11px;color:var(--muted)">${formatDate(s.date)}${s.notes?' · '+s.notes:''}</div></div><div style="font-size:12px;color:var(--muted)">at ${s.reading.toFixed(0)} ${unit}</div></div>`;}).reverse().join('')}</div>
         <button onclick="clearServiceHistory('${a.id}')" style="margin-top:6px;width:100%;padding:9px;background:none;border:1px solid var(--red);color:var(--red);border-radius:8px;font-size:13px;cursor:pointer">🗑 Clear History</button>`:''}
         ${(a.readingMode==='MANUAL_ONLY'||a.readingMode==='BOWSER_MANUAL')?`
           ${a.manualReadings&&a.manualReadings.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px"><div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px">Reading Log</div>${[...a.manualReadings].sort((x,y)=>y.reading-x.reading).map(r=>`<div onclick="editManualReading('${a.id}',${r.rid||0})" style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);cursor:pointer"><div><div style="font-size:13px;font-weight:600">${r.reading.toFixed(0)} ${unit}</div><div style="font-size:11px;color:var(--muted)">${formatDate(r.date)}${r.notes?' · '+r.notes:''}</div></div><div style="font-size:18px;color:var(--muted)">›</div></div>`).join('')}</div>`:''}
@@ -1042,17 +1043,59 @@ function getLatestReading(assetId){
   return fuel??manual??null;
 }
 
-function getMilestoneLabel(a,num){return(num*(a.serviceInterval||0)).toLocaleString()+' '+(a.measureType==='KM'?'km':'hrs')+' service';}
+// Milestone logic:
+// HOURS: cycles 250 > 500 > 750 > 1000⭐ then repeats forever
+// KM:    counts up forever (10k, 20k, 30k...) — no cycle cap
+function getHoursCycleLength(interval) {
+  if (!interval || interval <= 0) return 4;
+  return Math.round(1000 / interval);
+}
+
+// Get the true service number, accounting for opening entry svcNum offset.
+// If history was reset to a single opening entry at svcNum=5, subsequent
+// real services are 6, 7, 8... not 2, 3, 4.
+function getTrueServiceCount(a, indexInHistory) {
+  if (!a.serviceHistory || !a.serviceHistory.length) return indexInHistory;
+  // The first entry's svcNum tells us where history starts
+  const base = a.serviceHistory[0].svcNum || 1;
+  // If history has only 1 entry it's the opening entry; use its svcNum directly
+  if (a.serviceHistory.length === 1) return base;
+  // Otherwise: first entry is base, each subsequent entry adds 1
+  return base + (indexInHistory - 1);
+}
+
+function getMilestoneLabel(a, serviceCount) {
+  const interval = a.serviceInterval || 0;
+  const unit = a.measureType === 'KM' ? 'km' : 'hrs';
+  if (!interval) return 'Service';
+  if (a.measureType === 'KM') {
+    const milestoneVal = serviceCount * interval;
+    return milestoneVal.toLocaleString() + ' km service';
+  } else {
+    const cycleLength = getHoursCycleLength(interval);
+    const pos = ((serviceCount - 1) % cycleLength) + 1;
+    const milestoneVal = pos * interval;
+    const star = pos === cycleLength ? '⭐ ' : '';
+    return star + milestoneVal.toLocaleString() + ' hrs service';
+  }
+}
 
 function openServiceModal(assetId){
   serviceAssetId=assetId;
   const a=state.assets.find(x=>x.id===assetId);
   const unit=a.measureType==='KM'?'km':'hrs';
   const latest=getLatestReading(assetId);
-  const num=(a.serviceHistory?a.serviceHistory.length:0)+1;
+  const histLen=(a.serviceHistory?a.serviceHistory.length:0);
+  const num=histLen>0?getTrueServiceCount(a,histLen)+1:1;
+
+  // Work out which milestone we're at based on last service reading
+  const lastReading = a.lastServiceReading || 0;
+  const nextServiceReading = lastReading + (a.serviceInterval || 0);
+  const milestoneLabel = getMilestoneLabel(a, num);
+
   document.getElementById('svc-title').textContent='Log Service — '+assetId;
   document.getElementById('svc-subtitle').textContent=(a.desc||assetId)+' · Every '+a.serviceInterval.toLocaleString()+' '+unit;
-  document.getElementById('svc-milestone-label').textContent='Service #'+num+' — '+getMilestoneLabel(a,num);
+  document.getElementById('svc-milestone-label').textContent='Service #'+num+' — '+milestoneLabel;
   document.getElementById('svc-reading-label').textContent='Reading at Service ('+unit+')';
   document.getElementById('svc-current-reading').value=latest!=null?latest.toFixed(0):'';
   document.getElementById('svc-next-due').textContent=latest!=null?(latest+a.serviceInterval).toLocaleString()+' '+unit:'—';
@@ -1074,14 +1117,15 @@ async function confirmService(){
   const reading=parseFloat(document.getElementById('svc-current-reading').value);
   if(isNaN(reading)||reading<=0){showToast('Please enter the reading','error');return;}
   if(!a.serviceHistory)a.serviceHistory=[];
-  const num=a.serviceHistory.length+1;
-  a.serviceHistory.push({date,reading,svcNum:num,milestoneLabel:getMilestoneLabel(a,num),notes});
+  const num=a.serviceHistory.length>0?getTrueServiceCount(a,a.serviceHistory.length)+1:1;
+  const label=getMilestoneLabel(a,num);
+  a.serviceHistory.push({date,reading,svcNum:num,milestoneLabel:label,notes});
   a.lastServiceReading=reading;
   showLoading('Saving...');
   const {error}=await db.from('assets').update({service_history:a.serviceHistory,last_service_reading:reading}).eq('id',a.id);
   hideLoading();
   if(error){showToast('Save failed: '+error.message,'error');return;}
-  closeModal('service-modal');renderFleet();showToast('✅ '+getMilestoneLabel(a,num)+' logged!','success');
+  closeModal('service-modal');renderFleet();showToast('✅ '+label+' logged!','success');
 }
 async function clearServiceHistory(assetId){
   const a=state.assets.find(x=>x.id===assetId);if(!a)return;
@@ -1107,8 +1151,14 @@ async function confirmDeleteAsset(){
 
 function onAssetTypeChange(){
   const type=document.getElementById('na-type').value;
-  document.getElementById('na-last-reading-label').textContent='Reading at Last Service ('+(type==='KM'?'km':'hrs')+')';
-  buildMilestoneDropdown();
+  const isNone=type==='NONE';
+  // Hide entire service section and interval for NONE type
+  document.getElementById('na-interval-section').style.display=isNone?'none':'';
+  document.getElementById('na-last-service-section').style.display=isNone?'none':'';
+  if(!isNone){
+    document.getElementById('na-last-reading-label').textContent='Reading at Last Service ('+(type==='KM'?'km':'hrs')+')';
+    buildMilestoneDropdown();
+  }
 }
 function buildMilestoneDropdown(){
   const interval=parseFloat(document.getElementById('na-interval').value)||0;
@@ -1117,7 +1167,16 @@ function buildMilestoneDropdown(){
   const sel=document.getElementById('na-last-milestone');
   sel.innerHTML='<option value="">— select milestone —</option>';
   if(interval<=0)return;
-  for(let i=1;i<=20;i++){const v=i*interval;const opt=document.createElement('option');opt.value=i;opt.textContent=v.toLocaleString()+' '+unit+' service (service #'+i+')';sel.appendChild(opt);}
+  // Steps up to 100000km or 1000hrs depending on type
+  const cycleLength=type==='KM'?20:Math.round(1000/(interval||250));
+  for(let i=1;i<=cycleLength;i++){
+    const v=i*interval;
+    const star=i===cycleLength?'⭐ ':'';
+    const opt=document.createElement('option');
+    opt.value=i;
+    opt.textContent=star+v.toLocaleString()+' '+unit+' service';
+    sel.appendChild(opt);
+  }
   updateNextPreview();
 }
 function updateNextPreview(){
@@ -1140,9 +1199,8 @@ function openAddAsset(){
   refreshGroupDropdown();
   document.getElementById('na-group').value='Ungrouped';
   document.getElementById('na-last-reading').value='';
-  document.getElementById('na-last-service-section').style.display='';
   document.getElementById('na-next-preview').style.display='none';
-  buildMilestoneDropdown();
+  onAssetTypeChange();
   document.getElementById('asset-modal').classList.add('open');
 }
 function openEditAsset(assetId){
@@ -1154,10 +1212,21 @@ function openEditAsset(assetId){
   document.getElementById('na-desc').value=a.desc||'';
   document.getElementById('na-type').value=a.measureType||'HOURS';
   document.getElementById('na-readingMode').value=a.readingMode||'BOWSER_ONLY';
-  document.getElementById('na-interval').value=a.serviceInterval||0;
+  document.getElementById('na-interval').value=a.serviceInterval||250;
   refreshGroupDropdown();
   document.getElementById('na-group').value=a.group||'Ungrouped';
-  document.getElementById('na-last-service-section').style.display='none';
+  // Show the last service section so user can edit it
+  document.getElementById('na-last-reading').value=a.lastServiceReading!=null?a.lastServiceReading:'';
+  onAssetTypeChange();
+  // Pre-select the milestone matching current position in cycle
+  if(a.lastServiceReading!=null&&a.lastServiceReading>0){
+    const interval=a.serviceInterval||250;
+    // pre-select based on service count — for hours cycle, for km count up
+    const _cycLen=a.measureType==='KM'?20:Math.round(1000/(a.serviceInterval||250));
+    const pos=a.measureType==='KM'?Math.min(a.serviceHistory.length,20):(((a.serviceHistory.length-1)%Math.round(1000/(a.serviceInterval||250)))+1);
+    document.getElementById('na-last-milestone').value=pos;
+  }
+  updateNextPreview();
   document.getElementById('asset-modal').classList.add('open');
 }
 async function saveAsset(){
@@ -1165,12 +1234,23 @@ async function saveAsset(){
   if(!id){showToast('Please enter an ID','error');return;}
   if(editingAssetId){
     const a=state.assets.find(x=>x.id===editingAssetId);if(!a)return;
-    const updates={description:document.getElementById('na-desc').value.trim(),measure_type:document.getElementById('na-type').value,reading_mode:document.getElementById('na-readingMode').value,group_name:document.getElementById('na-group').value||'Ungrouped',service_interval:parseFloat(document.getElementById('na-interval').value)||0};
+    const lr=parseFloat(document.getElementById('na-last-reading').value);
+    const mnum=parseInt(document.getElementById('na-last-milestone').value)||0;
+    const newInterval=parseFloat(document.getElementById('na-interval').value)||0;
+    const newType=document.getElementById('na-type').value;
+    const newLastServiceReading=!isNaN(lr)&&lr>0?lr:a.lastServiceReading;
+    // If user has set a reading AND chosen a milestone, store just that one
+    // opening entry. svcNum records position in cycle so next service is correct.
+    let newServiceHistory=a.serviceHistory||[];
+    if(!isNaN(lr)&&lr>0&&mnum>0&&newInterval>0){
+      newServiceHistory=[{date:new Date().toISOString().split('T')[0],reading:lr,svcNum:mnum,notes:'Opening entry'}];
+    }
+    const updates={description:document.getElementById('na-desc').value.trim(),measure_type:newType,reading_mode:document.getElementById('na-readingMode').value,group_name:document.getElementById('na-group').value||'Ungrouped',service_interval:newInterval,last_service_reading:newLastServiceReading,service_history:newServiceHistory};
     showLoading('Saving...');
     const {error}=await db.from('assets').update(updates).eq('id',editingAssetId);
     hideLoading();
     if(error){showToast('Save failed: '+error.message,'error');return;}
-    a.desc=updates.description;a.measureType=updates.measure_type;a.readingMode=updates.reading_mode;a.group=updates.group_name;a.serviceInterval=updates.service_interval;
+    a.desc=updates.description;a.measureType=updates.measure_type;a.readingMode=updates.reading_mode;a.group=updates.group_name;a.serviceInterval=updates.service_interval;a.lastServiceReading=newLastServiceReading;a.serviceHistory=newServiceHistory;
     renderFleet();populateAssetSelect();closeModal('asset-modal');showToast('✅ Asset updated!','success');
   } else {
     if(state.assets.find(a=>a.id===id)){showToast('Asset ID already exists','error');return;}
@@ -1180,7 +1260,7 @@ async function saveAsset(){
     const type=document.getElementById('na-type').value;
     const unit=type==='KM'?'km':'hrs';
     let serviceHistory=[],lastServiceReading=null;
-    if(!isNaN(lr)&&lr>0&&mnum>0&&interval>0){lastServiceReading=lr;const mv=mnum*interval;serviceHistory.push({date:new Date().toISOString().split('T')[0],reading:lr,svcNum:mnum,milestoneLabel:mv.toLocaleString()+' '+unit+' service',notes:'Opening entry'});}
+    if(!isNaN(lr)&&lr>0&&mnum>0&&interval>0){lastServiceReading=lr;serviceHistory.push({date:new Date().toISOString().split('T')[0],reading:lr,svcNum:mnum,notes:'Opening entry'});}
     else if(!isNaN(lr)&&lr>0&&interval>0){lastServiceReading=lr;}
     const newAsset={id,description:document.getElementById('na-desc').value.trim(),measure_type:type,reading_mode:document.getElementById('na-readingMode').value,group_name:document.getElementById('na-group').value||'Ungrouped',service_interval:interval,last_service_reading:lastServiceReading,service_history:serviceHistory,manual_readings:[]};
     showLoading('Saving...');
