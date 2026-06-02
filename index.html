@@ -828,7 +828,6 @@ async function saveEdit() {
   hideLoading();
   if(error){showToast('Update failed: '+error.message,'error');return;}
   Object.assign(e,{date,litres,prevReading,currReading,consumptionVal,consumptionUnit,notes});
-  // If this is a fuel-out entry with readings, cascade recalculation through the full chain
   if(e.assetId&&e.assetId!=='TANK'&&asset&&asset.measureType!=='NONE'){
     showLoading('Recalculating chain...');
     await recalculateAssetChain(e.assetId);
@@ -1015,7 +1014,7 @@ function renderFleet(){
         <button onclick="openServiceModal('${a.id}')" style="margin-top:10px;width:100%;padding:9px;background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;font-size:13px;cursor:pointer">🔧 Log a Service...</button>
       </div>`;
     }
-    return`<div class="asset-card">
+    return`<div class="asset-card" id="asset-card-${a.id}">
       <div class="asset-header">
         <div class="asset-name">${getAssetIcon(a)} ${a.id}</div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -1043,7 +1042,6 @@ function getLatestReading(assetId){
   const asset=state.assets.find(a=>a.id===assetId);
   if(!asset)return null;
   const mode=asset.readingMode;
-  // Merge bowser entries + manual readings, sort by date, return latest reading
   const items=[];
   if(mode!=='MANUAL_ONLY'){
     state.entries.filter(e=>e.assetId===assetId&&e.type==='OUT'&&e.currReading!=null)
@@ -1286,17 +1284,15 @@ async function saveAsset(){
   }
 }
 
-
 // ============================================================
 //  RECALCULATE CHAIN — re-derive prevReading + consumption
-//  for all fuel entries of an asset after any edit.
-//  Timeline merges bowser entries + manual readings by date.
+//  for all fuel entries after any edit, using merged timeline
+//  of bowser entries + manual readings sorted by date.
 // ============================================================
 async function recalculateAssetChain(assetId){
   const asset=state.assets.find(a=>a.id===assetId);
   if(!asset||asset.measureType==='NONE')return;
   const mode=asset.readingMode;
-  // Build merged timeline: each item has {date, reading, kind, entry?}
   const timeline=[];
   if(mode!=='MANUAL_ONLY'){
     state.entries.filter(e=>e.assetId===assetId&&e.type==='OUT'&&e.currReading!=null)
@@ -1305,9 +1301,7 @@ async function recalculateAssetChain(assetId){
   if(mode!=='BOWSER_ONLY'&&asset.manualReadings&&asset.manualReadings.length){
     asset.manualReadings.forEach(r=>timeline.push({date:r.date,reading:r.reading,kind:'manual',id:r.rid||0}));
   }
-  // Sort chronologically; use id as tiebreaker for same-day items
   timeline.sort((a,b)=>new Date(a.date)-new Date(b.date)||a.id-b.id);
-  // Walk through: for each fuel entry, set prevReading = predecessor's reading
   const dbUpdates=[];
   for(let i=1;i<timeline.length;i++){
     const item=timeline[i];
@@ -1320,15 +1314,22 @@ async function recalculateAssetChain(assetId){
       else if(asset.measureType==='HOURS'){consumptionVal=e.litres/(e.currReading-prevReading);consumptionUnit='L/hr';}
     }
     if(e.prevReading!==prevReading||e.consumptionVal!==consumptionVal){
-      e.prevReading=prevReading;
-      e.consumptionVal=consumptionVal;
-      e.consumptionUnit=consumptionUnit;
+      e.prevReading=prevReading;e.consumptionVal=consumptionVal;e.consumptionUnit=consumptionUnit;
       dbUpdates.push({id:e.id,prev_reading:prevReading,consumption_val:consumptionVal,consumption_unit:consumptionUnit});
     }
   }
   for(const u of dbUpdates){
     await db.from('entries').update({prev_reading:u.prev_reading,consumption_val:u.consumption_val,consumption_unit:u.consumption_unit}).eq('id',u.id);
   }
+}
+
+// Navigate to a page and scroll to a specific element
+function showPageAndScrollTo(page,elementId){
+  showPage(page);
+  setTimeout(()=>{
+    const el=document.getElementById(elementId);
+    if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
+  },80);
 }
 
 // ============================================================
@@ -1351,7 +1352,7 @@ function renderStatus(){
     const remColor=progress<70?'var(--green)':progress<90?'var(--accent)':'var(--red)';
     const dot=progress<70?'🟢':progress<90?'🟡':'🔴';
     const remText=remaining>0?remaining.toFixed(0)+' '+unit+' to go':'OVERDUE '+Math.abs(remaining).toFixed(0)+' '+unit;
-    return`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;cursor:pointer" onclick="showPage('fleet')">
+    return`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;cursor:pointer" onclick="showPageAndScrollTo('fleet','asset-card-'+a.id)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${dot}</span><div><div style="font-size:15px;font-weight:700">${getAssetIcon(a)} ${a.id}</div><div style="font-size:11px;color:var(--muted)">${a.desc||''}</div></div></div>
         <div style="text-align:right"><div style="font-size:16px;font-weight:700;color:${remColor}">${remText}</div><div style="font-size:11px;color:var(--muted)">due at ${next.toLocaleString()} ${unit}</div></div>
