@@ -644,8 +644,8 @@ function onAssetChange() {
   document.getElementById('hr-fields').style.display = (show && asset && asset.measureType === 'HOURS') ? '' : 'none';
   document.getElementById('consumption-display').classList.remove('visible');
   if (show && asset) {
-    const prev = state.entries.filter(e => e.assetId === id && e.type === 'OUT' && e.currReading != null)
-                              .reduce((b, e) => (!b || e.currReading > b.currReading) ? e : b, null);
+    const prev = [...state.entries.filter(e => e.assetId === id && e.type === 'OUT' && e.currReading != null)]
+                              .sort((a,b)=>new Date(b.date)-new Date(a.date)||b.id-a.id)[0] || null;
     if (prev && asset.measureType === 'KM')    document.getElementById('f-km-prev').value = prev.currReading;
     if (prev && asset.measureType === 'HOURS') document.getElementById('f-hr-prev').value = prev.currReading;
   }
@@ -828,6 +828,12 @@ async function saveEdit() {
   hideLoading();
   if(error){showToast('Update failed: '+error.message,'error');return;}
   Object.assign(e,{date,litres,prevReading,currReading,consumptionVal,consumptionUnit,notes});
+  // If this is a fuel-out entry with readings, cascade recalculation through the full chain
+  if(e.assetId&&e.assetId!=='TANK'&&asset&&asset.measureType!=='NONE'){
+    showLoading('Recalculating chain...');
+    await recalculateAssetChain(e.assetId);
+    hideLoading();
+  }
   renderAll(); closeModal('detail-modal'); showToast('✅ Entry updated!','success');
 }
 async function deleteEntry() {
@@ -1035,12 +1041,20 @@ function renderFleet(){
 
 function getLatestReading(assetId){
   const asset=state.assets.find(a=>a.id===assetId);
-  const mode=asset?asset.readingMode:'BOWSER_ONLY';
-  let fuel=null,manual=null;
-  if(mode!=='MANUAL_ONLY'){const e=state.entries.filter(e=>e.assetId===assetId&&e.type==='OUT'&&e.currReading!=null);if(e.length)fuel=e.reduce((b,e)=>e.currReading>(b?.currReading||0)?e:b,null)?.currReading??null;}
-  if(mode!=='BOWSER_ONLY'&&asset.manualReadings&&asset.manualReadings.length)manual=asset.manualReadings.reduce((b,r)=>r.reading>(b?.reading||0)?r:b,null)?.reading??null;
-  if(fuel!=null&&manual!=null)return Math.max(fuel,manual);
-  return fuel??manual??null;
+  if(!asset)return null;
+  const mode=asset.readingMode;
+  // Merge bowser entries + manual readings, sort by date, return latest reading
+  const items=[];
+  if(mode!=='MANUAL_ONLY'){
+    state.entries.filter(e=>e.assetId===assetId&&e.type==='OUT'&&e.currReading!=null)
+      .forEach(e=>items.push({date:e.date,reading:e.currReading,id:e.id||0}));
+  }
+  if(mode!=='BOWSER_ONLY'&&asset.manualReadings&&asset.manualReadings.length){
+    asset.manualReadings.forEach(r=>items.push({date:r.date,reading:r.reading,id:r.rid||0}));
+  }
+  if(!items.length)return null;
+  items.sort((a,b)=>new Date(b.date)-new Date(a.date)||b.id-a.id);
+  return items[0].reading;
 }
 
 // Milestone logic:
@@ -1269,6 +1283,51 @@ async function saveAsset(){
     if(error){showToast('Save failed: '+error.message,'error');return;}
     state.assets.push({id,desc:newAsset.description,measureType:type,readingMode:newAsset.reading_mode,group:newAsset.group_name,serviceInterval:interval,lastServiceReading,serviceHistory,manualReadings:[]});
     renderFleet();populateAssetSelect();closeModal('asset-modal');showToast('✅ Asset added!','success');
+  }
+}
+
+
+// ============================================================
+//  RECALCULATE CHAIN — re-derive prevReading + consumption
+//  for all fuel entries of an asset after any edit.
+//  Timeline merges bowser entries + manual readings by date.
+// ============================================================
+async function recalculateAssetChain(assetId){
+  const asset=state.assets.find(a=>a.id===assetId);
+  if(!asset||asset.measureType==='NONE')return;
+  const mode=asset.readingMode;
+  // Build merged timeline: each item has {date, reading, kind, entry?}
+  const timeline=[];
+  if(mode!=='MANUAL_ONLY'){
+    state.entries.filter(e=>e.assetId===assetId&&e.type==='OUT'&&e.currReading!=null)
+      .forEach(e=>timeline.push({date:e.date,reading:e.currReading,kind:'entry',entry:e,id:e.id||0}));
+  }
+  if(mode!=='BOWSER_ONLY'&&asset.manualReadings&&asset.manualReadings.length){
+    asset.manualReadings.forEach(r=>timeline.push({date:r.date,reading:r.reading,kind:'manual',id:r.rid||0}));
+  }
+  // Sort chronologically; use id as tiebreaker for same-day items
+  timeline.sort((a,b)=>new Date(a.date)-new Date(b.date)||a.id-b.id);
+  // Walk through: for each fuel entry, set prevReading = predecessor's reading
+  const dbUpdates=[];
+  for(let i=1;i<timeline.length;i++){
+    const item=timeline[i];
+    if(item.kind!=='entry')continue;
+    const prevReading=timeline[i-1].reading;
+    const e=item.entry;
+    let consumptionVal=null,consumptionUnit=null;
+    if(prevReading!=null&&e.currReading!=null&&e.currReading>prevReading){
+      if(asset.measureType==='KM'){consumptionVal=(e.currReading-prevReading)/e.litres;consumptionUnit='km/L';}
+      else if(asset.measureType==='HOURS'){consumptionVal=e.litres/(e.currReading-prevReading);consumptionUnit='L/hr';}
+    }
+    if(e.prevReading!==prevReading||e.consumptionVal!==consumptionVal){
+      e.prevReading=prevReading;
+      e.consumptionVal=consumptionVal;
+      e.consumptionUnit=consumptionUnit;
+      dbUpdates.push({id:e.id,prev_reading:prevReading,consumption_val:consumptionVal,consumption_unit:consumptionUnit});
+    }
+  }
+  for(const u of dbUpdates){
+    await db.from('entries').update({prev_reading:u.prev_reading,consumption_val:u.consumption_val,consumption_unit:u.consumption_unit}).eq('id',u.id);
   }
 }
 
