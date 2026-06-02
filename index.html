@@ -1014,7 +1014,8 @@ function renderFleet(){
         <button onclick="openServiceModal('${a.id}')" style="margin-top:10px;width:100%;padding:9px;background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;font-size:13px;cursor:pointer">🔧 Log a Service...</button>
       </div>`;
     }
-    return`<div class="asset-card" id="asset-card-${a.id}">
+    const _safeId='asset-card-'+a.id.replace(/[^a-zA-Z0-9_-]/g,'_');
+    return`<div class="asset-card" id="${_safeId}">
       <div class="asset-header">
         <div class="asset-name">${getAssetIcon(a)} ${a.id}</div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -1352,7 +1353,7 @@ function renderStatus(){
     const remColor=progress<70?'var(--green)':progress<90?'var(--accent)':'var(--red)';
     const dot=progress<70?'🟢':progress<90?'🟡':'🔴';
     const remText=remaining>0?remaining.toFixed(0)+' '+unit+' to go':'OVERDUE '+Math.abs(remaining).toFixed(0)+' '+unit;
-    return`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;cursor:pointer" onclick="showPageAndScrollTo('fleet','asset-card-'+a.id)">
+    return`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;cursor:pointer" onclick="showPageAndScrollTo('fleet','${'asset-card-'+a.id.replace(/[^a-zA-Z0-9_-]/g,'_')}')">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${dot}</span><div><div style="font-size:15px;font-weight:700">${getAssetIcon(a)} ${a.id}</div><div style="font-size:11px;color:var(--muted)">${a.desc||''}</div></div></div>
         <div style="text-align:right"><div style="font-size:16px;font-weight:700;color:${remColor}">${remText}</div><div style="font-size:11px;color:var(--muted)">due at ${next.toLocaleString()} ${unit}</div></div>
